@@ -35,6 +35,21 @@ export default function IssueForm() {
   const [ensName, setEnsName] = useState("acme.factor.eth");
 
   const [step, setStep] = useState<Step>("idle");
+  /**
+   * The Swarm half, surfaced on its own.
+   *
+   * THE LAYERS ARE INDEPENDENT AND THE UI SHOULD NOT PRETEND OTHERWISE. The
+   * document upload finishes before anything touches a chain, so a missing
+   * contract address is no reason to hide a reference that already exists.
+   * Reporting it only on full success made a working Swarm layer look broken
+   * whenever the Fuji leg was not configured — which is exactly the state a
+   * half-finished deployment is in.
+   */
+  const [swarm, setSwarm] = useState<{
+    teaserRef: string;
+    docCommit: string;
+    encryptedBytes: number;
+  } | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [result, setResult] = useState<{
     docCommit: string;
@@ -64,6 +79,7 @@ export default function IssueForm() {
   async function submit() {
     setErr(null);
     setResult(null);
+    setSwarm(null);
     if (!file) return setErr("Attach the invoice PDF first.");
     if (!debtor.startsWith("0x")) return setErr("Enter the debtor's address.");
 
@@ -86,6 +102,9 @@ export default function IssueForm() {
 
       const doc = await uploadInvoiceDocument(file);
       const docCommit = commitToReference(doc.reference);
+
+      // On screen NOW, before the chain step can fail for unrelated reasons.
+      setSwarm({ teaserRef: teaser.reference, docCommit, encryptedBytes: file.size });
 
       // The reference itself never leaves this function. Keep it where only
       // the issuer can reach it until there is a buyer to seal it to.
@@ -215,6 +234,35 @@ export default function IssueForm() {
         </button>
         {step !== "idle" && step !== "done" && <span className="note">{label(step)}</span>}
       </div>
+
+      {swarm && !result && (
+        <>
+          <div className="ok">
+            Swarm is done. The encrypted document is stored and the public teaser is
+            published — this half needed no chain and no wallet.
+          </div>
+          <div className="card">
+            <div className="row">
+              <span className="k">teaser, public</span>
+              <span className="mono">{swarm.teaserRef.slice(0, 34)}…</span>
+            </div>
+            <div className="row" style={{ marginTop: 8 }}>
+              <span className="k">docCommit</span>
+              <span className="mono">{swarm.docCommit.slice(0, 34)}…</span>
+            </div>
+            <div className="row" style={{ marginTop: 8 }}>
+              <span className="k">encrypted</span>
+              <span className="mono">{swarm.encryptedBytes.toLocaleString()} bytes</span>
+            </div>
+            <p className="note">
+              The encrypted reference is deliberately absent from this screen and from
+              the index. It is 128 hex characters with the decryption key inside, so the
+              reference IS the capability — publishing it would publish the invoice. It
+              is held in this tab until there is a buyer to seal it to.
+            </p>
+          </div>
+        </>
+      )}
 
       {result && (
         <div className="ok" style={{ marginTop: 20 }}>
