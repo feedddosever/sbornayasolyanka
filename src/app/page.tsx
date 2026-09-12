@@ -285,6 +285,48 @@ export default function Market() {
     }
   }
 
+  /**
+   * Grant the claim contract an FUSD allowance, signed by WHOEVER IS CONNECTED.
+   *
+   * `sell()` pulls the payment from the buyer, so a bid cannot be accepted
+   * until that buyer has approved. `approve` can only be sent by the token
+   * holder itself, so nobody can do this on a financier's behalf — not the
+   * issuer, and not a deploy script holding some other key.
+   *
+   * The scripted path is `script/Approve.s.sol`, which needs each financier's
+   * private key in the environment. A passkey or MPC wallet has no exportable
+   * key, which would make the on-chain half of this demo impossible for a
+   * perfectly ordinary account. It is not impossible: such a wallet signs
+   * transactions happily, it just never hands over the key. So the step belongs
+   * in the browser, where the wallet lives.
+   *
+   * The financier switches to their own account in the wallet, clicks this, and
+   * the allowance is theirs. Same reasoning as FactorDeployer.sol, one layer up.
+   */
+  async function approveAsFinancier(l: Listing) {
+    setBusy(true);
+    setErr(null);
+    setTxHash(null);
+    try {
+      const account = await connectWallet();
+
+      // Approve the ON-CHAIN face value, not the Arkiv listing's copy: the
+      // index can lag, and the contract is the authority on what is owed.
+      const onChain = chain[l.invoiceId] ?? (await readInvoice(BigInt(l.invoiceId)));
+      const hash = await approveFusd(account, onChain.faceValueHuman);
+      setTxHash(hash);
+      setMsg(
+        `${account.slice(0, 10)}… approved ${onChain.faceValueHuman} FUSD to the claim ` +
+          `contract. That account can now have a bid accepted in its name. Switch ` +
+          `wallet accounts and repeat for the second financier.`,
+      );
+    } catch (e: any) {
+      setErr(humanise(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   /** Accept a bid on Fuji, recording which Arkiv entity it filled. */
   async function accept(l: Listing, bid: Bid) {
     setBusy(true);
@@ -501,6 +543,9 @@ export default function Market() {
                     onClick={() => postDemoBid(l, 2, 450, 20)}
                   >
                     Demo bid 4.50% / 20s (watch it lapse)
+                  </button>
+                  <button className="ghost" disabled={busy} onClick={() => approveAsFinancier(l)}>
+                    Approve FUSD as financier
                   </button>
                   <button className="ghost" disabled={busy} onClick={() => settle(l)}>
                     Settle as debtor
