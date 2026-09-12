@@ -11,9 +11,12 @@
 import { useEffect, useState } from "react";
 import {
   connectForDeploy,
-  deployFactor,
   discoverWallets,
+  prepareDeploy,
+  resolveDeploy,
+  sendPrepared,
   type DeployResult,
+  type PreparedDeploy,
   type WalletInfo,
 } from "@/fuji/deploy";
 import { explorerAddr, explorerTx } from "@/fuji/claim";
@@ -36,7 +39,9 @@ export default function DeployPage() {
   const [wallets, setWallets] = useState<WalletInfo[] | null>(null);
   const [hasEthereum, setHasEthereum] = useState<boolean | null>(null);
   const [account, setAccount] = useState<`0x${string}` | null>(null);
+  const [prepared, setPrepared] = useState<PreparedDeploy | null>(null);
   const [result, setResult] = useState<DeployResult | null>(null);
+  const [waiting, setWaiting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -47,27 +52,19 @@ export default function DeployPage() {
     discoverWallets().then(setWallets);
   }, []);
 
-  async function connect() {
-    setErr(null);
-    setBusy(true);
-    try {
-      setAccount(await connectForDeploy());
-    } catch (e: any) {
-      setErr(e.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function deploy() {
+  /**
+   * STEP ONE: everything slow. Connect, switch chain, build the calldata and
+   * price it. Doing this now is what makes step two safe — see below.
+   */
+  async function connectAndPrepare() {
     setErr(null);
     setBusy(true);
     setResult(null);
     try {
-      const acct = account ?? (await connectForDeploy());
+      const acct = await connectForDeploy();
       setAccount(acct);
-      setResult(
-        await deployFactor({
+      setPrepared(
+        await prepareDeploy({
           account: acct,
           issuer: issuer as `0x${string}`,
           debtor: debtor as `0x${string}`,
@@ -80,6 +77,30 @@ export default function DeployPage() {
     } finally {
       setBusy(false);
     }
+  }
+
+  /**
+   * STEP TWO: the signature request, and NOTHING may be awaited before it.
+   *
+   * A wallet that signs in a popup can only open that window while the browser
+   * still counts a user gesture as active, and every `await` ends the gesture.
+   * An earlier version of this handler connected and estimated gas first; the
+   * browser blocked the popup and reported "failed to open new window", so the
+   * wallet never saw the transaction at all.
+   *
+   * Hence `sendPrepared` on the first line. The awaits come after the wallet
+   * already has the request, where they cost nothing.
+   */
+  function deploy() {
+    if (!prepared) return;
+    setErr(null);
+    const sending = sendPrepared(prepared);
+    setWaiting(true);
+    sending
+      .then((txHash) => resolveDeploy(txHash))
+      .then(setResult)
+      .catch((e: any) => setErr(e.shortMessage || e.message))
+      .finally(() => setWaiting(false));
   }
 
   const envBlock = result
@@ -162,23 +183,38 @@ export default function DeployPage() {
       </p>
 
       <div className="row" style={{ marginTop: 18 }}>
-        <button onClick={deploy} disabled={busy}>
-          {busy ? "waiting on the wallet…" : "Deploy both contracts"}
+        <button className={prepared ? "ghost" : ""} onClick={connectAndPrepare} disabled={busy || waiting}>
+          {busy ? "connecting…" : prepared ? "1 · re-prepare" : "1 · Connect and prepare"}
         </button>
-        {!account && (
-          <button className="ghost" onClick={connect} disabled={busy}>
-            Just connect, don&apos;t deploy
-          </button>
-        )}
+        <button onClick={deploy} disabled={!prepared || waiting}>
+          {waiting ? "waiting on the chain…" : "2 · Deploy both contracts"}
+        </button>
         {account && (
           <span className="mono">
-            signing as {account.slice(0, 10)}…{" "}
+            {account.slice(0, 10)}…{" "}
             <a className="link" href={explorerAddr(account)} target="_blank" rel="noopener noreferrer">
               explorer
             </a>
           </span>
         )}
       </div>
+
+      {prepared && !result && (
+        <p className="note">
+          Priced at {prepared.gasDecimal.toLocaleString()} gas and ready. Step two sends
+          it with nothing awaited first, so a wallet that signs in a popup window is
+          still allowed to open one — every <span className="mono">await</span> in a
+          click handler ends the browser&apos;s user-gesture window and gets the popup
+          blocked.
+        </p>
+      )}
+
+      {!prepared && !busy && (
+        <p className="note">
+          Two steps on purpose. The first does all the slow work; the second is a single
+          request, so the wallet can open its window.
+        </p>
+      )}
 
       {err && <div className="err">{err}</div>}
 
