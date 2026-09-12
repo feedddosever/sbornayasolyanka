@@ -98,6 +98,108 @@ export interface DeployResult {
   gasUsed: string;
 }
 
+export interface PreparedDeploy {
+  from: `0x${string}`;
+  data: `0x${string}`;
+  gas: `0x${string}`;
+  gasDecimal: number;
+}
+
+/** ABI-encode one static address argument: 32 bytes, left-padded. */
+const encodeAddress = (a: string) => a.toLowerCase().replace(/^0x/, "").padStart(64, "0");
+
+/**
+ * Build and price the deployment BEFORE the user clicks.
+ *
+ * ── WHY PREPARATION IS SEPARATE FROM SENDING ─────────────────────────────
+ *
+ * A wallet that signs in a popup window can only open that window while the
+ * browser still considers a user gesture active. Every `await` in a click
+ * handler ends the gesture, so a handler that connects, estimates gas and then
+ * asks to sign gets its popup blocked — the browser reports "failed to open new
+ * window" and the transaction never reaches the wallet.
+ *
+ * The first version of this page did exactly that, and it is a real bug rather
+ * than a browser quirk to complain about: the fix is to do the slow work early.
+ * Everything that needs the network happens here, on connect. `sendPrepared`
+ * then issues a single request as the very first statement after the click,
+ * with nothing awaited in front of it.
+ *
+ * Estimating here has a second benefit: a constructor that would revert fails
+ * now, with a readable reason, instead of after a wallet confirmation.
+ */
+export async function prepareDeploy(args: {
+  account: `0x${string}`;
+  issuer: `0x${string}`;
+  debtor: `0x${string}`;
+  fin1: `0x${string}`;
+  fin2: `0x${string}`;
+}): Promise<PreparedDeploy> {
+  const data = (FACTOR_DEPLOYER_BYTECODE +
+    encodeAddress(args.issuer) +
+    encodeAddress(args.debtor) +
+    encodeAddress(args.fin1) +
+    encodeAddress(args.fin2)) as `0x${string}`;
+
+  const pub = createPublicClient({ chain: fuji, transport: http() });
+
+  let gas: bigint;
+  try {
+    gas = await pub.estimateGas({ account: args.account, data });
+  } catch (e: any) {
+    const reason = e?.shortMessage || e?.message || String(e);
+    throw new Error(
+      `The deployment would fail, so it was not sent. ${reason}\n\n` +
+        `The usual cause is a constructor guard: both financiers must differ ` +
+        `from the issuer and from each other. The other is an empty balance — ` +
+        `this account needs Fuji AVAX from core.app/tools/testnet-faucet.`,
+    );
+  }
+
+  // 25% headroom. An under-estimate here surfaces as an out-of-gas revert after
+  // the user has already approved, which is the worst place to discover it.
+  const withHeadroom = (gas * 125n) / 100n;
+  return {
+    from: args.account,
+    data,
+    gas: `0x${withHeadroom.toString(16)}`,
+    gasDecimal: Number(withHeadroom),
+  };
+}
+
+/**
+ * Send the prepared deployment. MUST be the first thing a click handler does —
+ * see the note on `prepareDeploy`. No awaits before the request, or the wallet
+ * popup is blocked.
+ */
+export function sendPrepared(p: PreparedDeploy): Promise<`0x${string}`> {
+  const eth = (window as any).ethereum;
+  if (!eth) return Promise.reject(new Error("No wallet found."));
+  return eth.request({
+    method: "eth_sendTransaction",
+    params: [{ from: p.from, data: p.data, gas: p.gas }],
+  }) as Promise<`0x${string}`>;
+}
+
+/** Resolve a sent deployment into its addresses. Safe to await — the wallet is done. */
+export async function resolveDeploy(txHash: `0x${string}`): Promise<DeployResult> {
+  const pub = createPublicClient({ chain: fuji, transport: http() });
+  const receipt = await pub.waitForTransactionReceipt({ hash: txHash });
+  if (receipt.status !== "success" || !receipt.contractAddress) {
+    throw new Error(
+      `The deployment was mined but reverted (${txHash}). The most likely cause ` +
+        `is a constructor guard: the financiers must differ from the issuer and ` +
+        `from each other.`,
+    );
+  }
+  const deployer = receipt.contractAddress;
+  const [fusd, claim] = (await Promise.all([
+    pub.readContract({ address: deployer, abi: FACTOR_DEPLOYER_ABI, functionName: "fusd" }),
+    pub.readContract({ address: deployer, abi: FACTOR_DEPLOYER_ABI, functionName: "claim" }),
+  ])) as [`0x${string}`, `0x${string}`];
+  return { deployer, fusd, claim, txHash, gasUsed: receipt.gasUsed.toString() };
+}
+
 /**
  * One transaction. FactorDeployer's constructor deploys FUSD and InvoiceClaim,
  * marks all four parties eligible, mints the test stablecoin and hands
