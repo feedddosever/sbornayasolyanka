@@ -18,6 +18,7 @@ import {
   uploadInvoiceDocument,
   uploadTeaser,
   uploadBlockedReason,
+  lastBeeMode,
 } from "@/swarm/client";
 import { commitToReference } from "@/swarm/seal";
 import { CLAIM_ADDRESS, connectWallet, issueInvoice, explorerTx } from "@/fuji/claim";
@@ -49,6 +50,7 @@ export default function IssueForm() {
     teaserRef: string;
     docCommit: string;
     encryptedBytes: number;
+    beeMode: string | null;
   } | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [result, setResult] = useState<{
@@ -104,7 +106,12 @@ export default function IssueForm() {
       const docCommit = commitToReference(doc.reference);
 
       // On screen NOW, before the chain step can fail for unrelated reasons.
-      setSwarm({ teaserRef: teaser.reference, docCommit, encryptedBytes: file.size });
+      setSwarm({
+        teaserRef: teaser.reference,
+        docCommit,
+        encryptedBytes: file.size,
+        beeMode: lastBeeMode(),
+      });
 
       // The reference itself never leaves this function. Keep it where only
       // the issuer can reach it until there is a buyer to seal it to.
@@ -253,6 +260,15 @@ export default function IssueForm() {
             <div className="row" style={{ marginTop: 8 }}>
               <span className="k">encrypted</span>
               <span className="mono">{swarm.encryptedBytes.toLocaleString()} bytes</span>
+            </div>
+            <div className="row" style={{ marginTop: 8 }}>
+              <span className="k">bee mode</span>
+              <span className="mono">
+                {swarm.beeMode ?? "unknown"} — deferred upload{" "}
+                {swarm.beeMode === "dev" || swarm.beeMode === null || swarm.beeMode === "unknown"
+                  ? "on"
+                  : "off"}
+              </span>
             </div>
             <p className="note">
               The encrypted reference is deliberately absent from this screen and from
