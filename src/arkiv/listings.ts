@@ -67,7 +67,7 @@ export async function discover(f: DiscoveryFilter) {
   // Arkiv throws InvalidPredicateError on a filter-less query, so the two
   // base clauses above are load-bearing, not decoration.
   const page = await arkivPublic
-    .select({ key: true, attributes: true, payload: true })
+    .select({ key: true, attributes: true, payload: true, expiresAt: true })
     .where(...clauses)
     .limit(100)
     .fetch();
@@ -78,7 +78,7 @@ export async function discover(f: DiscoveryFilter) {
 /** One listing by on-chain token id. */
 export async function listingFor(invoiceId: bigint) {
   const page = await arkivPublic
-    .select({ key: true, attributes: true, payload: true })
+    .select({ key: true, attributes: true, payload: true, expiresAt: true })
     .where(eq(PROJECT.key, str(PROJECT.value)),
     eq("kind", str(KIND.LISTING)), eq("invoice_id", u256(invoiceId)))
     .limit(1)
@@ -89,7 +89,7 @@ export async function listingFor(invoiceId: bigint) {
 /** Everything this issuer has ever listed. */
 export async function listingsByIssuer(issuer: `0x${string}`) {
   const page = await arkivPublic
-    .select({ key: true, attributes: true })
+    .select({ key: true, attributes: true, expiresAt: true })
     .where(eq(PROJECT.key, str(PROJECT.value)),
     eq("kind", str(KIND.LISTING)), eq("issuer", addr(issuer)))
     .limit(100)
@@ -101,7 +101,7 @@ export async function listingsByIssuer(issuer: `0x${string}`) {
 export async function allOpenListings() {
   const out: any[] = [];
   for await (const entity of arkivPublic
-    .select({ key: true, attributes: true })
+    .select({ key: true, attributes: true, expiresAt: true })
     .where(eq(PROJECT.key, str(PROJECT.value)),
     eq("kind", str(KIND.LISTING)), eq("sold", bool(false)))) {
     out.push(entity);
