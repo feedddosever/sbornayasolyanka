@@ -69,7 +69,7 @@ export async function liveBidsFor(invoiceId: bigint, maxDiscountBps: number): Pr
   const block = await currentBlock();
 
   const page = await arkivPublic
-    .select({ key: true, attributes: true, payload: true })
+    .select({ key: true, attributes: true, payload: true, expiresAt: true })
     .where(
       eq(PROJECT.key, str(PROJECT.value)),
       eq("kind", str(KIND.BID)),
@@ -96,6 +96,30 @@ export async function liveBidsFor(invoiceId: bigint, maxDiscountBps: number): Pr
       secondsLeft: secondsUntil(expiresAt, block),
     };
   });
+
+  /**
+   * CANARY: a bid that satisfied `$expiresAt > u64(block)` cannot have an
+   * expiry of zero, so a zero here means the FIELD WAS NOT SELECTED.
+   *
+   * This is not hypothetical. The selection above originally omitted
+   * `expiresAt`, and the consequences were invisible in every way that
+   * matters: filtering still worked, because `$expiresAt` is evaluated by the
+   * engine and does not need to be returned. Only the DISPLAY broke — every
+   * countdown read 0 while the bids themselves lived and expired correctly.
+   * `meta()` substitutes 0n for a missing field, so a field nobody asked for
+   * became a plausible-looking number rather than an error.
+   *
+   * Loud beats silent: a blank bid book sends you to the query, a frozen
+   * countdown sends you nowhere.
+   */
+  const unselected = bids.find((b) => b.expiresAtBlock === 0n);
+  if (unselected) {
+    throw new Error(
+      `bid ${unselected.entityKey} passed the $expiresAt filter but reports ` +
+        `expiresAt=0, which means expiresAt was not requested in select(). ` +
+        `Add \`expiresAt: true\` — filtering it is not the same as reading it.`,
+    );
+  }
 
   // Arkiv has no ORDER BY, so ranking happens here. Fine for a 50-row page,
   // wrong for a real book - noted in friction.md.
@@ -130,7 +154,7 @@ export async function bestBid(invoiceId: bigint, maxDiscountBps = 10_000) {
 export async function myLiveBids(financier: `0x${string}`) {
   const block = await currentBlock();
   const page = await arkivPublic
-    .select({ key: true, attributes: true })
+    .select({ key: true, attributes: true, expiresAt: true })
     .where(
       eq(PROJECT.key, str(PROJECT.value)),
       eq("kind", str(KIND.BID)),
@@ -157,7 +181,7 @@ export async function myLiveBids(financier: `0x${string}`) {
 export async function bidsSignedBy(signer: `0x${string}`) {
   const block = await currentBlock();
   const page = await arkivPublic
-    .select({ key: true, attributes: true })
+    .select({ key: true, attributes: true, expiresAt: true })
     .where(
       eq(PROJECT.key, str(PROJECT.value)),
       eq("kind", str(KIND.BID)),
@@ -181,7 +205,7 @@ export async function bidsSignedBy(signer: `0x${string}`) {
 export async function openBids(invoiceId: bigint) {
   const block = await currentBlock();
   return arkivPublic
-    .select({ key: true, attributes: true })
+    .select({ key: true, attributes: true, expiresAt: true })
     .where(
       eq(PROJECT.key, str(PROJECT.value)),
       eq("kind", str(KIND.BID)),
