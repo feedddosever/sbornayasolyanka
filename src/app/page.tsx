@@ -116,7 +116,7 @@ export default function Market() {
   const queryText = [
     `project     =  str('factor-invoice-market-ethrome-2026')`,
     `kind        =  str('listing')`,
-    `sold        =  bool(false)`,
+    `sold        =  false`,
     sector && `sector      =  str('${sector}')`,
     minFaceValue && `face_value  >= dec('${minFaceValue}')`,
     dueWithinDays && `due_date    <= u64(now + ${dueWithinDays}d)`,
