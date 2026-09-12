@@ -112,6 +112,38 @@ npx tsx scripts/evidence.ts            # through the app's own query layer
 python3 scripts/evidence-rpc.py        # straight at the JSON-RPC, no SDK
 ```
 
+### Deploying without an exportable private key
+
+`script/Deploy.s.sol` is the normal path. It needs `PRIVATE_KEY` in the
+environment, which a passkey or MPC wallet cannot provide — the account is an
+ordinary EOA and signs perfectly well, but the key never leaves the wallet.
+
+That rules out `forge script`. It does not rule out deploying, because a wallet
+can deploy a contract and a contract can do everything the script does. So
+`src/FactorDeployer.sol` **is** the deploy script, run by its own constructor:
+
+1. Open [remix.ethereum.org](https://remix.ethereum.org), load `contracts/src/`
+   (Remix resolves the OpenZeppelin imports itself)
+2. Compile with Solidity 0.8.24 or later
+3. Deploy tab → environment **Injected Provider**, network **Fuji (43113)**
+4. Select `FactorDeployer` and give the constructor four addresses:
+   `issuer`, `debtor`, `fin1`, `fin2`
+5. Deploy. One transaction deploys FUSD and InvoiceClaim, marks all four
+   accounts eligible, mints FUSD to the debtor and both financiers, and hands
+   ownership of the claim to you
+6. Read `fusd` and `claim` off the deployed contract for the two addresses
+
+`fin1` and `fin2` must differ from the issuer and from each other — the
+constructor reverts with a readable message otherwise, because `sell()` reverts
+with `SelfPurchase` when the buyer is the current holder and the issuer holds
+the claim immediately after issuance. `test/FactorDeployer.t.sol` covers that
+and the happy path.
+
+The financiers' FUSD allowances are the one thing this cannot do for you:
+`approve` may only be sent by the token holder itself. Use **Approve FUSD as
+financier** on the market page, once per financier account, or
+`script/Approve.s.sol` if you do have the keys.
+
 **Funding, all of which has latency — do it first:** Fuji AVAX from `core.app/tools/testnet-faucet` (needs a mainnet AVAX balance or an Avalanche Guild coupon; 2 AVAX per 24h), Arkiv GLM from `hub.arkiv.network`, Sepolia ETH **plus MockUSDC** (the ENSv2 ETHRegistrar charges MockUSDC, not ETH).
 
 Health check for the Arkiv wiring — signer address, whether it is funded, and
