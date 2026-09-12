@@ -177,6 +177,55 @@ export function uploadBlockedReason(info: ConnectionInfo | null | undefined): st
 }
 
 /**
+ * WHICH UPLOAD MODE THIS NODE CAN ACTUALLY DO, AND WHY IT MUST BE ASKED.
+ *
+ * `deferred: false` means "do not return a reference until the data is
+ * network-available", which is what you want for a demo: a deferred reference
+ * can 404 for a while, and a document that 404s in front of a judge is worse
+ * than a slow upload.
+ *
+ * But it is not always possible. From the SDK's own documentation on
+ * `getNodeInfo`:
+ *
+ *     if (nodeInfo.beeMode === 'dev') {
+ *       // Dev mode requires deferred uploads
+ *       await client.uploadData(data, { deferred: true })
+ *     }
+ *
+ * A dev-mode Bee cannot do a direct upload, so forcing `deferred: false`
+ * against one waits until something gives up. The first version of this file
+ * hardcoded `false` and passed no request timeout at all, so the default 30
+ * seconds expired and the user saw `Request timeout after 30000ms` — a message
+ * about the clock rather than about the node.
+ *
+ * So the mode is asked for once and cached, and the timeout is stated
+ * explicitly rather than inherited.
+ */
+let nodeMode: string | null = null;
+
+async function uploadMode(): Promise<{ deferred: boolean; beeMode: string }> {
+  const c = required("uploadMode");
+  if (nodeMode === null) {
+    try {
+      nodeMode = (await (c as any).getNodeInfo()).beeMode ?? "unknown";
+    } catch {
+      // Not knowing is itself a reason to take the tolerant path: a deferred
+      // upload works on every mode, it just returns sooner than it is fetchable.
+      nodeMode = "unknown";
+    }
+  }
+  return { deferred: nodeMode === "dev" || nodeMode === "unknown", beeMode: nodeMode! };
+}
+
+/** Reported so the UI can say which mode it used instead of leaving it a mystery. */
+export function lastBeeMode(): string | null {
+  return nodeMode;
+}
+
+const TEASER_TIMEOUT_MS = 60_000;
+const DOCUMENT_TIMEOUT_MS = 180_000;
+
+/**
  * The PUBLIC redacted teaser. Unencrypted on purpose: its reference goes
  * straight into the Arkiv listing so anyone can read it, and it carries no
  * counterparty names, no line items and no exact amounts.
@@ -184,19 +233,44 @@ export function uploadBlockedReason(info: ConnectionInfo | null | undefined): st
 export async function uploadTeaser(summary: object): Promise<{ reference: string }> {
   const c = required("uploadTeaser");
   const bytes = new TextEncoder().encode(JSON.stringify(summary, null, 2));
-  // deferred: false - the default returns a reference BEFORE the data is
-  // network-available, which makes a fresh document 404 mid-demo.
-  return c.uploadData(bytes, { encrypt: false, deferred: false });
+  const { deferred } = await uploadMode();
+  return c.uploadData(
+    bytes,
+    { encrypt: false, deferred },
+    { timeout: TEASER_TIMEOUT_MS },
+  );
 }
 
 /**
  * The full invoice, encrypted. The returned reference is 128 hex characters and
  * contains the decryption key, so the caller must treat it as a secret: commit
  * to it on-chain, seal it to the buyer, but never publish it.
+ *
+ * A real PDF over a testnet takes longer than the SDK's default 30-second
+ * request timeout, so the timeout is raised here. If even that expires the
+ * message says what to do about it, rather than only how long it waited.
  */
 export async function uploadInvoiceDocument(file: File): Promise<{ reference: string }> {
   const c = required("uploadInvoiceDocument");
-  return c.uploadFile(file, file.name, { encrypt: true, deferred: false });
+  const { deferred, beeMode } = await uploadMode();
+  try {
+    return await c.uploadFile(
+      file,
+      file.name,
+      { encrypt: true, deferred },
+      { timeout: DOCUMENT_TIMEOUT_MS },
+    );
+  } catch (e: any) {
+    if (/timeout/i.test(String(e?.message))) {
+      throw new Error(
+        `Swarm did not finish storing ${(file.size / 1024).toFixed(0)} KB within ` +
+          `${DOCUMENT_TIMEOUT_MS / 1000}s (node mode: ${beeMode}, deferred: ${deferred}). ` +
+          `The upload may still complete in the background. Try a smaller file to ` +
+          `prove the flow — the encryption and the commitment do not depend on size.`,
+      );
+    }
+    throw e;
+  }
 }
 
 export async function downloadDocument(reference: string) {
