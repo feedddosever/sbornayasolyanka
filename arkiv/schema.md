@@ -63,6 +63,41 @@ first clause of the predicate rather than an afterthought.
 | 10 | Model related data with shared attributes | `invoice_id` links bid → listing → the Fuji token id |
 | 11 | Understand `$owner` vs `$creator` | **deliberately not relied on** — signing keys are server-side, so `$owner` is Factor's key, not the financier's. Whose bid it is comes from the `financier` attribute. See below. |
 
+## A note on naming, because it cost a debugging round
+
+**Every attribute name in this file is snake_case, and it has to be.**
+
+The engine's identifier type `Ident32` rejects an uppercase letter anywhere
+after the first character. `discountBps` reverts with
+`Ident32InvalidByte(8, 0x42)` — byte 8 being the capital `B`.
+
+Two places in the SDK disagree with the engine about that:
+
+| Where | What it claims |
+|---|---|
+| `Ident32` (engine) | uppercase rejected |
+| `CHARSET` in `dist/index.js` | `"A"-"Z"` permitted — a hardcoded string pasted into the error text |
+| `NAME_RE` in `dist/attr-*.js` | `/^[A-Za-z][A-Za-z0-9._-]*$/`, so `isValidAttributeName("discountBps")` returns **`true`** |
+
+So a camelCase name typechecks, passes the SDK's own exported validator, and is
+then refused at simulation — with a message describing a charset that would have
+permitted it. Nothing upstream catches it, and the symptom is not an error
+anywhere a developer looks: writes fail, reads keep working, and the market just
+looks empty.
+
+Worse, it can be **half-deployed**: names live here in `schema.ts` while query
+predicates live in `bids.ts` and `listings.ts`, so a build with one file updated
+and not the other writes `snake_case` and queries `camelCase`. Every write
+succeeds, every read returns nothing, and neither side raises anything. That
+happened, and it is why `/api/arkiv/health` now audits every attribute name the
+running build would write.
+
+Reported as item 1 of [`friction.md`](../friction.md).
+
+The TypeScript input interfaces (`ListingInput`, `BidInput`, `HandoverInput`)
+stay camelCase — they are ordinary TypeScript and nothing on the wire sees them.
+Only the attribute names are snake_case.
+
 ## Entity kinds
 
 `kind` is the first clause of every query. That is deliberate: it partitions the
