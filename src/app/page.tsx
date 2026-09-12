@@ -73,6 +73,28 @@ const FINANCIERS: Record<1 | 2, `0x${string}` | undefined> = {
   2: process.env.NEXT_PUBLIC_FIN2_ADDR as `0x${string}` | undefined,
 };
 
+/**
+ * Stand-ins used only when the real financier addresses are unset.
+ *
+ * POSTING A BID AND ACCEPTING ONE ARE DIFFERENT ACTS, and an earlier version of
+ * this file conflated them. A bid is an Arkiv entity — an index row that never
+ * touches a chain — so it does not need an eligible, funded, non-holder
+ * address. `sell()` does. Refusing to write the index row because the *later*
+ * on-chain step would fail put a configuration error in front of the Arkiv
+ * demo, which is the part that works.
+ *
+ * So the guard moved to where it bites: you can always post a bid, and
+ * `accept()` is what refuses a placeholder. Lowercase on purpose — no EIP-55
+ * checksum to get wrong.
+ */
+const DEMO_FINANCIER: Record<1 | 2, `0x${string}`> = {
+  1: "0x000000000000000000000000000000000000fac1",
+  2: "0x000000000000000000000000000000000000fac2",
+};
+
+const isPlaceholder = (a: string) =>
+  a.toLowerCase() === DEMO_FINANCIER[1] || a.toLowerCase() === DEMO_FINANCIER[2];
+
 export default function Market() {
   const [sector, setSector] = useState("");
   const [minFaceValue, setMin] = useState("");
@@ -217,14 +239,11 @@ export default function Market() {
     setErr(null);
     setTxHash(null);
     try {
-      const financier = FINANCIERS[slot];
-      if (!financier) {
-        throw new Error(
-          `NEXT_PUBLIC_FIN${slot}_ADDR is not set. A bid needs a real, eligible ` +
-            `financier address — the issuer cannot buy their own claim (sell() ` +
-            `reverts with SelfPurchase).`,
-        );
-      }
+      // Unset is not a reason to refuse: an Arkiv bid is an index row, not a
+      // chain call. Fall back, and let accept() be the thing that objects.
+      const financier = FINANCIERS[slot] ?? DEMO_FINANCIER[slot];
+      const usingPlaceholder = !FINANCIERS[slot];
+
       const holder = chain[l.invoiceId]?.holder;
       if (holder && holder.toLowerCase() === financier.toLowerCase()) {
         throw new Error(
@@ -249,7 +268,16 @@ export default function Market() {
         }),
       }).then((x) => x.json());
       if (r.error) setErr(r.error);
-      else setMsg(`Bid posted, lifetime ${r.ttlSeconds}s — entity ${r.entityKey.slice(0, 18)}…`);
+      else
+        setMsg(
+          `Bid posted, lifetime ${r.ttlSeconds}s — entity ${r.entityKey.slice(0, 18)}…` +
+            (usingPlaceholder
+              ? `  ·  NEXT_PUBLIC_FIN${slot}_ADDR is unset, so this quote stands in ` +
+                `the name of a placeholder address. The Arkiv entity is real and will ` +
+                `expire on its own; accepting it on Fuji will not work until a funded, ` +
+                `eligible financier address is configured.`
+              : ""),
+        );
     } catch (e: any) {
       setErr(e.message);
     } finally {
@@ -262,6 +290,22 @@ export default function Market() {
     setBusy(true);
     setErr(null);
     try {
+      // THIS is where a placeholder financier matters. `sell()` pulls the
+      // payment from the buyer, so the buyer must be a real address that is
+      // eligible, funded in FUSD, has granted an allowance, and is not the
+      // current holder. Fail here with the reason rather than letting the
+      // transaction revert and explaining a hex error code on stage.
+      if (isPlaceholder(bid.financier)) {
+        throw new Error(
+          `This bid stands in the name of a placeholder financier ` +
+            `(${bid.financier.slice(0, 10)}…), because NEXT_PUBLIC_FIN1_ADDR / ` +
+            `NEXT_PUBLIC_FIN2_ADDR are not configured. The Arkiv side of the demo ` +
+            `works — the entity is real and expires on its own — but a sale needs a ` +
+            `funded, eligible buyer. Set those two variables to addresses you ` +
+            `control, redeploy, and run script/Approve.s.sol for each.`,
+        );
+      }
+
       const account = await connectWallet();
 
       const hash = await acceptBid({
