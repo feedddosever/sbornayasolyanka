@@ -5,8 +5,8 @@
  * Arkiv entity with a short lifetime, so a stale quote stops existing without
  * anybody deleting it and without a reaper job. Expiry is the feature.
  */
-import { eq, gt, lte, not, exists } from "@arkiv-network/sdk/query";
-import { addr, i32, str, u256, u64 } from "@arkiv-network/sdk/attr";
+import { eq, gt, lte, not } from "@arkiv-network/sdk/query";
+import { addr, bool, i32, str, u256, u64 } from "@arkiv-network/sdk/attr";
 import { ExpirationTime, jsonToPayload } from "@arkiv-network/sdk/utils";
 import { arkivPublic, arkivWallet, currentBlock, secondsUntil } from "./client";
 import { bidAttributes, KIND, type BidInput } from "./schema";
@@ -194,13 +194,24 @@ export async function bidsSignedBy(signer: `0x${string}`) {
 }
 
 /**
- * Bids on invoices that have NOT been marked sold.
+ * Bids that have NOT been withdrawn.
  *
- * Note `not(exists(...))` rather than `ne(...)`. This is the SDK's sharpest
- * footgun: `ne("withdrawn", bool(true))` matches only entities where
- * `withdrawn` is SET to something else, silently skipping every entity that
- * never had the attribute at all. `not(exists())` / `not(eq())` is almost
- * always what you actually mean.
+ * `not(eq(...))`, and the two rejected alternatives are the point.
+ *
+ * The SDK exports `ne` and `exists`, and the Tiramisu node refuses both:
+ *
+ *   != is not part of the query language — write NOT (attr = value)
+ *      for the complement                                        (-32002)
+ *   exists(…) is not supported — the index has no per-attribute
+ *      presence set in this profile                              (-32002)
+ *
+ * So the usual advice for the `ne` footgun — reach for `exists` — is itself
+ * unavailable here. `not(eq(...))` is the only spelling that runs.
+ *
+ * It is also the right one. Verified against the node: for an entity that has
+ * no `withdrawn` attribute at all, `NOT withdrawn = true` MATCHES. Absence
+ * satisfies the complement, which is what "not withdrawn" should mean and what
+ * a naive `ne` would have silently excluded.
  */
 export async function openBids(invoiceId: bigint) {
   const block = await currentBlock();
@@ -211,7 +222,7 @@ export async function openBids(invoiceId: bigint) {
       eq("kind", str(KIND.BID)),
       eq("invoice_id", u256(invoiceId)),
       gt("$expiresAt", u64(block)),
-      not(exists("withdrawn")),
+      not(eq("withdrawn", bool(true))),
     )
     .limit(50)
     .fetch();
