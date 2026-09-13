@@ -109,7 +109,7 @@ transport, not `http()`. This matters more than it looks: viem only opens
 `eth_subscribe` when the transport can carry it, so the documented Live Events
 example — which constructs the client with `http()` and defaults
 `pollingInterval` to half a block — builds the polling implementation this
-mission disqualifies. Reported as item 2 of `friction.md`.
+mission disqualifies. Reported as item 2 of `feedback.md`.
 
 **Filtered.** The subscription is narrowed to the storage engine's address and
 to the entity-event topics the app acts on. Forty teams share this testnet;
@@ -173,7 +173,7 @@ nothing. No error was raised on either side, and the app reported an empty
 market while the data sat in the index, perfectly readable.
 
 A witness that shares the app's query layer cannot catch that. These two can,
-and did. The underlying naming trap is `friction.md` item 1.
+and did. The underlying naming trap is `feedback.md` item 1.
 
 ---
 
@@ -204,7 +204,7 @@ off.
 | 30% | **Why Arkiv / Web3 database?** | `README.md` → *Mutable state lives in Arkiv because the market needs a queryable set, not a pointer*; and the `$expiresAt`-as-predicate argument in Mission 02 above |
 | 25% | **Technical execution** | Live demo; `schema.md`; the two re-runnable witnesses above; 23 passing contract tests including fuzz |
 | 20% | **Usefulness & adoption** | `README.md` → *The problem* and *Where this goes next*, incl. the first-100-users route |
-| 25% | **Arkiv feedback** | `friction.md` — 8 items, each with repro steps, plus the one-line fixes where the cause is a specific constant in the SDK |
+| 25% | **Arkiv feedback** | `feedback.md` — 8 items, each with repro steps, plus the one-line fixes where the cause is a specific constant in the SDK |
 
 ### The 30% question, in one paragraph
 
@@ -233,5 +233,5 @@ makes the quotes honest.
 
 `GET /api/arkiv/health` reports the signer address, whether it is funded, and
 whether every attribute name the build writes will be accepted by the engine —
-the last check exists because of `friction.md` item 1, and it makes both the
+the last check exists because of `feedback.md` item 1, and it makes both the
 naming trap and the half-deploy visible instead of silent.
