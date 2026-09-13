@@ -13,8 +13,12 @@ import {
   connectForDeploy,
   discoverWallets,
   prepareDeploy,
+  prepareEligibility,
+  prepareFunding,
   resolveDeploy,
   sendPrepared,
+  sendPreparedCall,
+  waitForTx,
   type DeployResult,
   type PreparedDeploy,
   type WalletInfo,
@@ -23,6 +27,23 @@ import { explorerAddr, explorerTx } from "@/fuji/claim";
 
 /** Pre-filled with the accounts this deployment is for. Editable, because the
  *  next person to read this repo will have different ones. */
+/**
+ * Already deployed, and recorded in the README. Editable because the point of
+ * the section below is to fix a mismatch, and a hardcoded address is the kind
+ * of thing that goes stale.
+ */
+const DEPLOYED = {
+  claim: "0x6eCeaF4c89cFE03093Ebc55c2B750386c88c7cC0",
+  fusd: "0xe21305727CE87e3Aa84D187080F8A828dB1b480E",
+};
+
+/** The accounts the operator can actually sign with. */
+const SIGNABLE = [
+  { address: "0xDAA819098f20d20ac3FE57B8303DBF05Cc98C429", role: "issuer + debtor", fusd: 500_000 },
+  { address: "0x2A058020fa86281b6695Fad49c302182ec8aeA34", role: "financier 1", fusd: 250_000 },
+  { address: "0xB6ce5887278D2271cE151aa544Cf4E46EAa84405", role: "financier 2", fusd: 250_000 },
+];
+
 const DEFAULTS = {
   issuer: "0x509709a89f827AA8D3F4729F508518b8D44643a6",
   debtor: "0x509709a89f827AA8D3F4729F508518b8D44643a6",
@@ -43,6 +64,14 @@ export default function DeployPage() {
   const [result, setResult] = useState<DeployResult | null>(null);
   const [waiting, setWaiting] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  // Post-deploy repair: whitelist and fund the accounts that can sign.
+  const [claim, setClaim] = useState(DEPLOYED.claim);
+  const [fusdAddr, setFusdAddr] = useState(DEPLOYED.fusd);
+  const [signable, setSignable] = useState(SIGNABLE.map((s) => s.address).join("\n"));
+  const [elig, setElig] = useState<any>(null);
+  const [fund, setFund] = useState<any>(null);
+  const [setupMsg, setSetupMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   // Report the environment before anything is clicked, so a missing wallet is
@@ -99,6 +128,68 @@ export default function DeployPage() {
     sending
       .then((txHash) => resolveDeploy(txHash))
       .then(setResult)
+      .catch((e: any) => setErr(e.shortMessage || e.message))
+      .finally(() => setWaiting(false));
+  }
+
+  const signableList = signable
+    .split(/[\s,]+/)
+    .map((a) => a.trim())
+    .filter((a) => /^0x[0-9a-fA-F]{40}$/.test(a)) as `0x${string}`[];
+
+  /** Slow work up front, exactly as with the deployment. */
+  async function prepareSetup() {
+    setErr(null);
+    setSetupMsg(null);
+    setBusy(true);
+    try {
+      const acct = account ?? (await connectForDeploy());
+      setAccount(acct);
+      setElig(
+        await prepareEligibility({
+          account: acct,
+          claim: claim as `0x${string}`,
+          addresses: signableList,
+        }),
+      );
+      setFund(
+        await prepareFunding({
+          account: acct,
+          fusd: fusdAddr as `0x${string}`,
+          targets: signableList.map((a, i) => ({
+            address: a,
+            amountHuman: SIGNABLE[i]?.fusd ?? 250_000,
+          })),
+        }),
+      );
+    } catch (e: any) {
+      setErr(e.shortMessage || e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** One signature each. Nothing awaited before the request — see deploy(). */
+  function grantEligibility() {
+    if (!elig) return;
+    setErr(null);
+    const sending = sendPreparedCall(elig);
+    setWaiting(true);
+    sending
+      .then(waitForTx)
+      .then((r) => setSetupMsg(`Eligibility granted. tx ${r.hash.slice(0, 20)}…`))
+      .catch((e: any) => setErr(e.shortMessage || e.message))
+      .finally(() => setWaiting(false));
+  }
+
+  function mintFusd() {
+    if (!fund) return;
+    setErr(null);
+    const sending = sendPrepared(fund);
+    setWaiting(true);
+    sending
+      .then(waitForTx)
+      .then((r) => setSetupMsg(`FUSD minted. tx ${r.hash.slice(0, 20)}…`))
       .catch((e: any) => setErr(e.shortMessage || e.message))
       .finally(() => setWaiting(false));
   }
@@ -256,6 +347,73 @@ export default function DeployPage() {
           </div>
         </>
       )}
+
+      <h2>Set up the accounts you can actually sign with</h2>
+      <p className="note">
+        The deployment whitelisted and funded the addresses it was given. If those are
+        not the addresses in your wallet, nothing needs redeploying: you own the claim,
+        so you can grant eligibility, and <span className="mono">FUSD.mint</span> has no
+        access control at all. Two transactions, one signature each.
+      </p>
+
+      <div className="filters">
+        <label>
+          InvoiceClaim
+          <input value={claim} onChange={(e) => setClaim(e.target.value)} />
+        </label>
+        <label>
+          FUSD
+          <input value={fusdAddr} onChange={(e) => setFusdAddr(e.target.value)} />
+        </label>
+      </div>
+
+      <div className="card" style={{ marginTop: 12 }}>
+        <span className="k">accounts to whitelist and fund</span>
+        <textarea
+          value={signable}
+          onChange={(e) => setSignable(e.target.value)}
+          rows={3}
+          style={{
+            width: "100%",
+            marginTop: 8,
+            background: "var(--panel2)",
+            border: "1px solid var(--line)",
+            color: "var(--ink)",
+            borderRadius: 8,
+            padding: "8px 10px",
+            fontFamily: "var(--mono)",
+            fontSize: 12,
+          }}
+        />
+        <p className="note">
+          One per line. {signableList.length} valid address
+          {signableList.length === 1 ? "" : "es"} detected. FUSD amounts follow the roles:
+          500,000 to the first (issuer and debtor, enough to settle), 250,000 to each of
+          the other two (enough to buy).
+        </p>
+      </div>
+
+      <div className="row" style={{ marginTop: 14 }}>
+        <button className="ghost" onClick={prepareSetup} disabled={busy || waiting}>
+          {busy ? "preparing…" : elig ? "1 · re-prepare" : "1 · Prepare both"}
+        </button>
+        <button onClick={grantEligibility} disabled={!elig || waiting}>
+          2a · Grant eligibility
+        </button>
+        <button onClick={mintFusd} disabled={!fund || waiting}>
+          2b · Mint FUSD
+        </button>
+      </div>
+
+      {elig && fund && (
+        <p className="note">
+          Priced: {elig.gasDecimal.toLocaleString()} gas for eligibility,{" "}
+          {fund.gasDecimal.toLocaleString()} for the mint. Eligibility is owner-only, so
+          if it refused, connect the account that deployed.
+        </p>
+      )}
+
+      {setupMsg && <div className="ok">{setupMsg}</div>}
     </main>
   );
 }
