@@ -211,8 +211,12 @@ block heights and the historic `atBlock` read are preserved here and in
 
 # Known limitations
 
-- Contracts are not yet deployed to Fuji, so accept-and-settle is testable
-  locally but not from the deployed page.
+- Contracts ARE deployed to Fuji: `InvoiceClaim`
+  `0x6eCeaF4c89cFE03093Ebc55c2B750386c88c7cC0`, `FUSD`
+  `0xe21305727CE87e3Aa84D187080F8A828dB1b480E`, in transaction
+  `0x90b7e8f5e96aeee4ca40e14fa089a584f9d3d91202a448ede97c26e336882e3d`.
+  Deployed from a browser wallet with no exportable private key, because
+  `forge script` needs one and the operator's wallet does not provide one.
 - `NEXT_PUBLIC_FIN1_ADDR` / `FIN2_ADDR` are unset, so demo quotes stand in the
   name of a labelled placeholder address; the sale path refuses a placeholder
   with the reason rather than reverting on chain.
