@@ -85,15 +85,22 @@ Nobody is asked to switch networks during the demo.
 
 ## Run it
 
+**The contracts are already deployed** — addresses below. To stand up your own
+copy, the browser route needs no private key and no toolchain: open `/deploy`,
+connect a wallet, and one transaction does everything. See *Deploying without an
+exportable private key*. What follows is the scripted route, for when you do
+have a key.
+
 ```bash
 # 1. contracts
 cd contracts
-forge test -vv                      # 23 tests, incl. fuzz over eligibility + settlement
+forge test -vv                      # 28 tests, incl. fuzz over eligibility + settlement
 forge script script/Deploy.s.sol --rpc-url fuji --broadcast -vvv
 
 # 1b. each financier grants a standing FUSD allowance. `sell()` is called by
 #     the holder but pulls from the buyer, so without this the demo fails at
-#     the moment a bid is accepted.
+#     the moment a bid is accepted. The market page has a button for this too,
+#     which is the route to use when the key cannot be exported.
 PRIVATE_KEY=<financier-1-key> FUSD_ADDRESS=0x.. CLAIM_ADDRESS=0x.. \
   forge script script/Approve.s.sol --rpc-url fuji --broadcast
 PRIVATE_KEY=<financier-2-key> FUSD_ADDRESS=0x.. CLAIM_ADDRESS=0x.. \
@@ -251,6 +258,21 @@ Reconnection is the interesting part: you cannot both replay a gap and stay on a
 **ENS** — ENSv2 beta on Sepolia: a `UserRegistry` deployed via `VerifiableFactory` and wired in with `setSubregistry`, per-business subnames with native registry expiry, a per-account `PermissionedResolver`, and record-level delegation via `authorizeTextRoles` so an accountant can edit one text key and is reverted on the payout address.
 
 ---
+
+## A stale directory, disclosed rather than hidden
+
+`factor/` is a duplicate of this project from early in the weekend, left behind
+when the repository was restructured. **Ignore it**: it is excluded from the
+TypeScript build and nothing imports it. It survives only because removing 32
+files through the GitHub API one commit at a time would have made the history
+less readable than the directory makes the tree. Remove it with:
+
+```bash
+git rm -r factor && git commit -m "remove the stale duplicate" && git push
+```
+
+Naming it here because a reviewer opening the repository will see it, and
+discovering it unexplained is worse than being told.
 
 ## Honest limitations
 
