@@ -200,7 +200,7 @@ export async function GET() {
   //
   // A REGRESSION GUARD, and it earns its place. A camelCase attribute name
   // passes `tsc`, passes the SDK's own `isValidAttributeName`, and is then
-  // refused by the engine's `Ident32` — see friction.md item 1. The symptom is
+  // refused by the engine's `Ident32` — see arkiv/feedback.md item 1. The symptom is
   // not an error anywhere a user looks: writes fail while reads keep working,
   // so the market simply stays empty and it reads as a funding problem.
   //
@@ -240,7 +240,7 @@ export async function GET() {
       note:
         rejected.length === 0
           ? "Every attribute name this build writes is lowercase, so Ident32 will accept it."
-          : `These names will be REJECTED by the engine on every write: ${rejected.join(", ")}. Rename them to snake_case; see friction.md item 1.`,
+          : `These names will be REJECTED by the engine on every write: ${rejected.join(", ")}. Rename them to snake_case; see arkiv/feedback.md item 1.`,
     };
   } catch (e: any) {
     (report.checks as any).attributeNames = { ok: false, error: e?.message ?? String(e) };
