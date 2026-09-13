@@ -108,6 +108,21 @@ export async function initSwarm(
     const gateway = process.env.NEXT_PUBLIC_SWARM_SUBSIDISED_GATEWAY?.trim();
     const options: Record<string, unknown> = {
       iframeOrigin: "https://swarm-id.snaha.net",
+      /**
+       * The proxy gets 90 seconds to signal readiness, not the default 30.
+       *
+       * `Proxy initialization timeout - proxy did not signal readiness within
+       * 30000ms` is what a slow or contested iframe load looks like, and 30
+       * seconds is optimistic on venue wifi with a cold service worker. This
+       * option exists in ClientOptions and I had simply never set it — the same
+       * omission as the upload request timeout, and the same symptom: a message
+       * about the clock rather than about the cause.
+       *
+       * Raising it does not paper over a blocked iframe. A blocked iframe never
+       * signals readiness at all, so it still fails — just with a message that
+       * now says so. See swarmInitError in src/app/issue/IssueForm.tsx.
+       */
+      initializationTimeout: 90_000,
       metadata: {
         name: "Factor",
         description: "Invoice financing where the document stays yours",
