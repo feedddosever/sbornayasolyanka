@@ -25,8 +25,6 @@ import {
 } from "@/fuji/deploy";
 import { explorerAddr, explorerTx } from "@/fuji/claim";
 
-/** Pre-filled with the accounts this deployment is for. Editable, because the
- *  next person to read this repo will have different ones. */
 /**
  * Already deployed, and recorded in the README. Editable because the point of
  * the section below is to fix a mismatch, and a hardcoded address is the kind
@@ -44,11 +42,17 @@ const SIGNABLE = [
   { address: "0xB6ce5887278D2271cE151aa544Cf4E46EAa84405", role: "financier 2", fusd: 250_000 },
 ];
 
+/**
+ * Defaults for a FRESH deployment. These match SIGNABLE above, because the
+ * lesson of the first deployment was that whitelisting addresses the operator
+ * cannot sign with is the same as not whitelisting anything. Editable, since
+ * the next person to read this repo has different accounts.
+ */
 const DEFAULTS = {
-  issuer: "0x509709a89f827AA8D3F4729F508518b8D44643a6",
-  debtor: "0x509709a89f827AA8D3F4729F508518b8D44643a6",
-  fin1: "0x23F2e037b5aD1d62454dA79515a4D661415469f4",
-  fin2: "0x00CB614D71Fd3d31e9c10Bc4c3f3739CAb95e948",
+  issuer: SIGNABLE[0].address,
+  debtor: SIGNABLE[0].address,
+  fin1: SIGNABLE[1].address,
+  fin2: SIGNABLE[2].address,
 };
 
 export default function DeployPage() {
