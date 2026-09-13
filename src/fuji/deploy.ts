@@ -33,7 +33,12 @@
  */
 import { createPublicClient, createWalletClient, custom, http } from "viem";
 import { fuji, ensureFuji } from "./claim";
-import { FACTOR_DEPLOYER_ABI, FACTOR_DEPLOYER_BYTECODE } from "./deployerArtifact";
+import {
+  FACTOR_DEPLOYER_ABI,
+  FACTOR_DEPLOYER_BYTECODE,
+  FACTOR_FUNDER_BYTECODE,
+  SET_ELIGIBLE_BATCH_SELECTOR,
+} from "./deployerArtifact";
 
 export interface WalletInfo {
   name: string;
@@ -245,4 +250,108 @@ export async function deployFactor(args: {
   ])) as [`0x${string}`, `0x${string}`];
 
   return { deployer, fusd, claim, txHash, gasUsed: receipt.gasUsed.toString() };
+}
+
+// ─────────────────────────────────────────── post-deploy setup, one tx each
+//
+// The deployment funds and whitelists whatever addresses it was given. If those
+// turn out not to be the addresses the operator can actually sign with — a
+// perfectly ordinary mistake, and the one that happened here — the contracts do
+// not need redeploying. The claim's owner can grant eligibility, and FUSD's
+// mint has no access control at all.
+//
+// Each of these is ONE transaction, because a wallet that signs in a popup only
+// gets one gesture per click. Batching is the whole reason FactorFunder exists.
+
+const pad = (hex: string) => hex.toLowerCase().replace(/^0x/, "").padStart(64, "0");
+const num = (n: bigint) => pad(n.toString(16));
+
+/**
+ * Mark up to three accounts eligible in one call, via `setEligibleBatch`.
+ * Only the claim's owner may do this. Encoding verified against `cast calldata`.
+ */
+export async function prepareEligibility(args: {
+  account: `0x${string}`;
+  claim: `0x${string}`;
+  addresses: `0x${string}`[];
+}): Promise<PreparedDeploy & { to: `0x${string}` }> {
+  const list = args.addresses.filter(Boolean);
+  const data = (SET_ELIGIBLE_BATCH_SELECTOR +
+    pad("0x40") + // offset to the array data: two head words
+    pad("0x1") + // allowed = true
+    pad(list.length.toString(16)) +
+    list.map(pad).join("")) as `0x${string}`;
+
+  const pub = createPublicClient({ chain: fuji, transport: http() });
+  let gas: bigint;
+  try {
+    gas = await pub.estimateGas({ account: args.account, to: args.claim, data });
+  } catch (e: any) {
+    throw new Error(
+      `Cannot grant eligibility from this account. ${e?.shortMessage || e?.message}\n\n` +
+        `setEligible is owner-only — connect the account that deployed the ` +
+        `contracts, which is the one ownership was handed to.`,
+    );
+  }
+  const withHeadroom = (gas * 130n) / 100n;
+  return {
+    from: args.account,
+    to: args.claim,
+    data,
+    gas: `0x${withHeadroom.toString(16)}`,
+    gasDecimal: Number(withHeadroom),
+  };
+}
+
+/** Mint FUSD to up to three accounts in one transaction, by deploying FactorFunder. */
+export async function prepareFunding(args: {
+  account: `0x${string}`;
+  fusd: `0x${string}`;
+  targets: { address: `0x${string}`; amountHuman: number }[];
+}): Promise<PreparedDeploy> {
+  const three = [0, 1, 2].map(
+    (i) =>
+      args.targets[i] ?? {
+        address: "0x0000000000000000000000000000000000000000" as `0x${string}`,
+        amountHuman: 0,
+      },
+  );
+  // FUSD has 6 decimals, matching a real dollar stablecoin.
+  const data = (FACTOR_FUNDER_BYTECODE +
+    pad(args.fusd) +
+    three.map((t) => pad(t.address) + num(BigInt(Math.round(t.amountHuman * 1e6)))).join("")) as
+    `0x${string}`;
+
+  const pub = createPublicClient({ chain: fuji, transport: http() });
+  let gas: bigint;
+  try {
+    gas = await pub.estimateGas({ account: args.account, data });
+  } catch (e: any) {
+    throw new Error(`The minting transaction would fail. ${e?.shortMessage || e?.message}`);
+  }
+  const withHeadroom = (gas * 130n) / 100n;
+  return {
+    from: args.account,
+    data,
+    gas: `0x${withHeadroom.toString(16)}`,
+    gasDecimal: Number(withHeadroom),
+  };
+}
+
+/** Send a prepared call that has a `to` (i.e. not a deployment). */
+export function sendPreparedCall(p: PreparedDeploy & { to: `0x${string}` }): Promise<`0x${string}`> {
+  const eth = (window as any).ethereum;
+  if (!eth) return Promise.reject(new Error("No wallet found."));
+  return eth.request({
+    method: "eth_sendTransaction",
+    params: [{ from: p.from, to: p.to, data: p.data, gas: p.gas }],
+  }) as Promise<`0x${string}`>;
+}
+
+/** Wait for a plain transaction and report whether it succeeded. */
+export async function waitForTx(hash: `0x${string}`): Promise<{ hash: `0x${string}`; gasUsed: string }> {
+  const pub = createPublicClient({ chain: fuji, transport: http() });
+  const r = await pub.waitForTransactionReceipt({ hash });
+  if (r.status !== "success") throw new Error(`Transaction ${hash} reverted.`);
+  return { hash, gasUsed: r.gasUsed.toString() };
 }
