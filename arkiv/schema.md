@@ -92,7 +92,7 @@ succeeds, every read returns nothing, and neither side raises anything. That
 happened, and it is why `/api/arkiv/health` now audits every attribute name the
 running build would write.
 
-Reported as item 1 of [`friction.md`](../friction.md).
+Reported as item 1 of [`feedback.md`](./feedback.md).
 
 The TypeScript input interfaces (`ListingInput`, `BidInput`, `HandoverInput`)
 stay camelCase — they are ordinary TypeScript and nothing on the wire sees them.
@@ -198,7 +198,7 @@ builder rather than a decorative wrapper over a fetch-by-id.
 ## What we hit along the way
 
 - **No `ORDER BY` and no `COUNT`.** Bids are ranked client-side after fetching a
-  page. Fine at 50 rows, wrong for a real book. See `friction.md`.
+  page. Fine at 50 rows, wrong for a real book. See `feedback.md`.
 - **`MAX_LIMIT` is 200** and cursors are bound to an exact query/block/selection,
   so they cannot be reused across a modified builder.
 - **`$createdAt` is not queryable** — only `$key`, `$owner`, `$creator` and
@@ -211,7 +211,7 @@ builder rather than a decorative wrapper over a fetch-by-id.
   query that filters on it. We renamed `rating--band` to `ratingBand` early — and then had to rename it
   again to `rating_band`, because the node rejects uppercase after the first
   character even though the SDK's own `NAME_RE` permits it. Two naming rules,
-  neither of them in the docs. See friction.md item 1.
+  neither of them in the docs. See feedback.md item 1.
 - **Durations drift.** `BLOCK_TIME` is a nominal 2 seconds and the docs are
   explicit that block production is not a clock, so a `fromSeconds(60)` lifetime
   is approximately a minute. The UI reads `$expiresAt` back rather than counting
