@@ -341,6 +341,17 @@ function swarmInitError(e: any): string {
   if (/Invalid message format/.test(raw)) {
     return `Swarm ID rejected the client options: ${raw.replace(/\s+/g, " ").slice(0, 200)}`;
   }
+  if (/proxy did not signal readiness|Proxy initialization timeout/i.test(raw)) {
+    return (
+      "Swarm ID's hidden iframe never reported ready. The service itself was " +
+      "reachable when this message was written, so the usual cause is local: a " +
+      "privacy extension or browser shield blocking a third-party iframe, or " +
+      "third-party storage being blocked so the iframe cannot reach its own keys. " +
+      "Try a normal window rather than private browsing, pause the blocker for " +
+      "this site, then reload. Nothing else on this page depends on it — the " +
+      "Arkiv market works without Swarm."
+    );
+  }
   if (/timeout|timed out/i.test(raw)) {
     return (
       "Swarm ID did not respond in time. Its hidden iframe on swarm-id.snaha.net " +
