@@ -122,7 +122,7 @@ export async function liveBidsFor(invoiceId: bigint, maxDiscountBps: number): Pr
   }
 
   // Arkiv has no ORDER BY, so ranking happens here. Fine for a 50-row page,
-  // wrong for a real book - noted in friction.md.
+  // wrong for a real book - noted in arkiv/feedback.md.
   return bids.sort((a, b) => a.discountBps - b.discountBps);
 }
 
