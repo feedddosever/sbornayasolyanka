@@ -102,7 +102,7 @@ async function main() {
       : "\n  INCONCLUSIVE - wait longer, or check whether the engine still\n" +
           "  returns expired entities. Block production is not a clock, so a\n" +
           "  requested lifetime in seconds can lapse later than the wall clock\n" +
-          "  suggests; see the duration-helpers item in friction.md.\n",
+          "  suggests; see the duration-helpers item in arkiv/feedback.md.\n",
   );
 }
 
