@@ -196,12 +196,35 @@ app's query layer cannot catch that class of bug. This one can.
 
 | What | Chain | Address |
 |---|---|---|
-| `InvoiceClaim` | Fuji 43113 | `TODO after deploy` |
-| `FUSD` (test stablecoin, 6dp) | Fuji 43113 | `TODO after deploy` |
-| UserRegistry (ENSv2) | Sepolia | `TODO after ens-setup` |
-| PermissionedResolver | Sepolia | `TODO after ens-setup` |
+| `InvoiceClaim` | Fuji 43113 | [`0x6eCeaF4c89cFE03093Ebc55c2B750386c88c7cC0`](https://testnet.snowtrace.io/address/0x6eCeaF4c89cFE03093Ebc55c2B750386c88c7cC0) |
+| `FUSD` (test stablecoin, 6dp) | Fuji 43113 | [`0xe21305727CE87e3Aa84D187080F8A828dB1b480E`](https://testnet.snowtrace.io/address/0xe21305727CE87e3Aa84D187080F8A828dB1b480E) |
+| `FactorDeployer` (one-shot setup) | Fuji 43113 | [`0xAb746aa64197064D661A966BB76a91B19Ed9B75C`](https://testnet.snowtrace.io/address/0xAb746aa64197064D661A966BB76a91B19Ed9B75C) |
+| UserRegistry (ENSv2) | Sepolia | not deployed — see *Honest limitations* |
+| PermissionedResolver | Sepolia | not deployed — see *Honest limitations* |
 
-Example transactions: `TODO — issue / sell / rejected transfer / settle`
+**Deployment transaction:**
+[`0x90b7e8f5e96aeee4ca40e14fa089a584f9d3d91202a448ede97c26e336882e3d`](https://testnet.snowtrace.io/tx/0x90b7e8f5e96aeee4ca40e14fa089a584f9d3d91202a448ede97c26e336882e3d)
+— block 58338714, 2,494,377 gas. One transaction: both contracts deployed, four
+accounts marked eligible, FUSD minted, and ownership of the claim transferred to
+the signer. Signed from a browser wallet with no exportable private key, via
+`/deploy` — see *Deploying without an exportable private key* above.
+
+**State you can verify without trusting this README:**
+
+| Call | Expected |
+|---|---|
+| `InvoiceClaim.owner()` | `0xDAA819098f20d20ac3FE57B8303DBF05Cc98C429` |
+| `eligible(0x509709a8…43a6)` | `true` — the issuer |
+| `eligible(0x23F2e037…69f4)` | `true` — financier 1 |
+| `eligible(0x00CB614D…e948)` | `true` — financier 2 |
+| `FUSD.balanceOf(0x509709a8…43a6)` | 500,000 — enough to settle |
+| `FUSD.balanceOf(0x23F2e037…69f4)` | 250,000 — enough to buy |
+| `FUSD.balanceOf(0x00CB614D…e948)` | 250,000 |
+
+Example transactions for issue / sell / rejected transfer / settle: pending. The
+contracts and the funded, eligible parties are on chain; the flow itself is
+covered by the 28 Foundry tests in `contracts/test`, including a fuzz run over
+eligibility and settlement.
 
 ---
 
