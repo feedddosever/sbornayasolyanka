@@ -6,7 +6,7 @@ transaction.
 
 - Repository: https://github.com/feedddosever/sbornayasolyanka (public)
 - Deployment: https://sbornayasolyanka.vercel.app
-- Feedback report: [`arkiv/friction.md`](./friction.md) — 8 items with reproduction steps
+- Feedback report: [`arkiv/feedback.md`](./feedback.md) — nine items with reproduction steps
 - Mission evidence, long form: [`arkiv/missions.md`](./missions.md)
 - Schema rationale: [`arkiv/schema.md`](./schema.md)
 - Missions claimed: **Mission 02** and **Mission 03**. Mission 01 is not claimed.
