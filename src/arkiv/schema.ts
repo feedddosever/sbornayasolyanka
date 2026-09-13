@@ -40,7 +40,7 @@ import { PROJECT } from "./project";
  * an actual write does, and the symptom you see first is an empty market.
  *
  * Every example in Arkiv's best-practices guide is snake_case, which in
- * hindsight was the hint. Reported as friction.md item 1.
+ * hindsight was the hint. Reported as feedback.md item 1.
  *
  * DO NOT introduce a camelCase attribute name here. The TypeScript input
  * interfaces below stay camelCase - they never reach the wire - so only the
