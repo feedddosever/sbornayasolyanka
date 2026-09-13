@@ -249,7 +249,7 @@ Reconnection is the interesting part: you cannot both replay a gap and stay on a
 
 *Usefulness and adoption (their 20%).* The user is a 5-50 person business that invoices on 60-90 day terms and finances that gap out of its own working capital — the segment traditional factoring prices out. First hundred users would come through the accountants and bookkeepers who already see these invoices: one bookkeeping practice carries dozens of SMEs, and Factor's ENSv2 role delegation is built for exactly that relationship, letting a practice manage clients' records without holding their payout keys. The financier side is the harder half and I won't pretend otherwise.
 
-*Feedback (their 25%).* [`friction.md`](./friction.md) — seven reproducible items with repro steps, plus what worked. Schema rationale in [`arkiv/schema.md`](./arkiv/schema.md).
+*Feedback (their 25%).* [`arkiv/feedback.md`](./arkiv/feedback.md) — nine reproducible items with repro steps, plus what worked. Schema rationale in [`arkiv/schema.md`](./arkiv/schema.md).
 
 **Swarm** — Real uploads and real retrieval through Swarm ID with passkey sign-in; the issuer's document is encrypted and stays theirs. Bee-js is not used because Swarm ID removes the node from the critical path entirely.
 
