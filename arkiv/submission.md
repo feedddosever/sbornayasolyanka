@@ -217,9 +217,10 @@ block heights and the historic `atBlock` read are preserved here and in
   `0x90b7e8f5e96aeee4ca40e14fa089a584f9d3d91202a448ede97c26e336882e3d`.
   Deployed from a browser wallet with no exportable private key, because
   `forge script` needs one and the operator's wallet does not provide one.
-- `NEXT_PUBLIC_FIN1_ADDR` / `FIN2_ADDR` are unset, so demo quotes stand in the
-  name of a labelled placeholder address; the sale path refuses a placeholder
-  with the reason rather than reverting on chain.
+- The deployment above predates signed bids: its `sell()` takes a price chosen
+  by the holder, not one signed by the buyer. The current app calls
+  `sell(Bid, signature, arkivBidKey)`, so it needs a fresh deploy (the /deploy
+  page ships the new bytecode).
 - Swarm uploads need a postage batch, so `canUpload` is false without a gift code.
 - No default handling at settlement: this is a market mechanism, not a credit
   product.

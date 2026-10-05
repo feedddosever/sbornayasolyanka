@@ -33,10 +33,12 @@ Acme signs in with a passkey              → Swarm ID, no wallet, no seed phras
   publishes a listing                     → Arkiv, queryable, self-pruning
 
 Financiers discover it                    → 5-clause compound Arkiv query
-  post bids with 60s lifetimes            → Arkiv, expiry is the cancel mechanism
+  sign bids (EIP-712, price + deadline)   → wallet signature, no gas
+  post them with 60s lifetimes            → Arkiv, expiry is the cancel mechanism
   one bid expires, untouched               → no delete call, no reaper job
 
-Acme accepts the survivor                 → Fuji sell(), records the Arkiv bid key
+Acme accepts the survivor                 → Fuji sell(signed bid), records the Arkiv bid key
+  a changed price or reused bid fails     → reverts: the buyer's signature binds both
   an ineligible buyer is rejected          → reverts in the ERC-721 transfer hook
   the document is sealed to the buyer      → ECIES to their ENSv2 pubkey record
 
@@ -94,12 +96,13 @@ have a key.
 ```bash
 # 1. contracts
 cd contracts
-forge test -vv                      # 28 tests, incl. fuzz over eligibility + settlement
+forge test -vv                      # 35 tests, incl. fuzz over eligibility, settlement + signed price
 forge script script/Deploy.s.sol --rpc-url fuji --broadcast -vvv
 
 # 1b. each financier grants a standing FUSD allowance. `sell()` is called by
 #     the holder but pulls from the buyer, so without this the demo fails at
-#     the moment a bid is accepted. The market page has a button for this too,
+#     the moment a bid is accepted. The allowance is safe to leave standing:
+#     `sell()` only takes the price the buyer signed, on the claim they signed for. The market page has a button for this too,
 #     which is the route to use when the key cannot be exported.
 PRIVATE_KEY=<financier-1-key> FUSD_ADDRESS=0x.. CLAIM_ADDRESS=0x.. \
   forge script script/Approve.s.sol --rpc-url fuji --broadcast
@@ -146,7 +149,8 @@ with `SelfPurchase` when the buyer is the current holder and the issuer holds
 the claim immediately after issuance. `test/FactorDeployer.t.sol` covers that
 and the happy path.
 
-The financiers' FUSD allowances are the one thing this cannot do for you:
+The financiers' FUSD allowances and bid signatures are the things this cannot
+do for you:
 `approve` may only be sent by the token holder itself. Use **Approve FUSD as
 financier** on the market page, once per financier account, or
 `script/Approve.s.sol` if you do have the keys.

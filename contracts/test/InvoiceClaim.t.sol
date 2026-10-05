@@ -15,8 +15,11 @@ contract InvoiceClaimTest is Test {
     address internal platform = address(0xA11CE);
     address internal acme = address(0xACC1); // issuer (SME)
     address internal debtor = address(0xDEB7);
-    address internal financier = address(0xF1);
-    address internal financier2 = address(0xF2);
+    // Financiers sign their bids, so they need real keys.
+    uint256 internal constant FIN_PK = 0xF1;
+    uint256 internal constant FIN2_PK = 0xF2;
+    address internal financier = vm.addr(FIN_PK);
+    address internal financier2 = vm.addr(FIN2_PK);
     address internal stranger = address(0xBAD);
 
     uint256 internal constant FACE = 10_000e6; // 10,000 FUSD
@@ -56,6 +59,40 @@ contract InvoiceClaimTest is Test {
     function _issue() internal returns (uint256 id) {
         vm.prank(acme);
         id = claim.issue(debtor, FACE, dueDate, keccak256("swarm-ref"));
+    }
+
+    function _keyOf(address who) internal view returns (uint256) {
+        if (who == financier) return FIN_PK;
+        if (who == financier2) return FIN2_PK;
+        return uint256(keccak256(abi.encode(who))); // a key that is NOT `who`'s
+    }
+
+    /// A bid signed by `buyer`, valid for an hour.
+    function _bid(uint256 id, address buyer, uint256 price, bytes32 salt)
+        internal
+        view
+        returns (InvoiceClaim.Bid memory bid, bytes memory sig)
+    {
+        bid = InvoiceClaim.Bid({
+            id: id,
+            buyer: buyer,
+            price: price,
+            deadline: uint64(block.timestamp + 1 hours),
+            salt: salt
+        });
+        sig = _sign(_keyOf(buyer), bid);
+    }
+
+    function _sign(uint256 pk, InvoiceClaim.Bid memory bid) internal view returns (bytes memory) {
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(pk, claim.hashBid(bid));
+        return abi.encodePacked(r, s, v);
+    }
+
+    /// Fill a freshly signed bid as `seller`.
+    function _sell(address seller, uint256 id, address buyer, uint256 price, bytes32 bidKey) internal {
+        (InvoiceClaim.Bid memory bid, bytes memory sig) = _bid(id, buyer, price, bidKey);
+        vm.prank(seller);
+        claim.sell(bid, sig, bidKey);
     }
 
     // ------------------------------------------------------------- issuance
@@ -109,9 +146,10 @@ contract InvoiceClaimTest is Test {
 
     function test_RevertWhen_SellingToIneligibleBuyer() public {
         uint256 id = _issue();
+        (InvoiceClaim.Bid memory bid, bytes memory sig) = _bid(id, stranger, 9_700e6, bytes32(0));
         vm.prank(acme);
         vm.expectRevert(abi.encodeWithSelector(InvoiceClaim.NotEligible.selector, stranger));
-        claim.sell(id, stranger, 9_700e6, bytes32(0));
+        claim.sell(bid, sig, bytes32(0));
     }
 
     /// The policy must hold even when someone bypasses `sell` and uses the raw
@@ -174,8 +212,9 @@ contract InvoiceClaimTest is Test {
         uint256 acmeBefore = fusd.balanceOf(acme);
         uint256 finBefore = fusd.balanceOf(financier);
 
+        (InvoiceClaim.Bid memory bid, bytes memory sig) = _bid(id, financier, price, keccak256("arkiv-bid-1"));
         vm.prank(acme);
-        claim.sell(id, financier, price, keccak256("arkiv-bid-1"));
+        claim.sell(bid, sig, keccak256("arkiv-bid-1"));
 
         assertEq(claim.ownerOf(id), financier, "claim should move to the financier");
         assertEq(fusd.balanceOf(acme), acmeBefore + price, "issuer receives discounted cash");
@@ -193,29 +232,33 @@ contract InvoiceClaimTest is Test {
         vm.expectEmit(true, true, true, true);
         emit Sold(id, acme, financier, price, bidKey);
 
+        (InvoiceClaim.Bid memory bid, bytes memory sig) = _bid(id, financier, price, bidKey);
         vm.prank(acme);
-        claim.sell(id, financier, price, bidKey);
+        claim.sell(bid, sig, bidKey);
     }
 
     function test_RevertWhen_SellerIsNotHolder() public {
         uint256 id = _issue();
+        (InvoiceClaim.Bid memory bid, bytes memory sig) = _bid(id, financier2, 1e6, bytes32(0));
         vm.prank(financier);
         vm.expectRevert(abi.encodeWithSelector(InvoiceClaim.NotHolder.selector, financier));
-        claim.sell(id, financier2, 1e6, bytes32(0));
+        claim.sell(bid, sig, bytes32(0));
     }
 
     function test_RevertWhen_SellingToSelf() public {
         uint256 id = _issue();
+        (InvoiceClaim.Bid memory bid, bytes memory sig) = _bid(id, acme, 1e6, bytes32(0));
         vm.prank(acme);
         vm.expectRevert(InvoiceClaim.SelfPurchase.selector);
-        claim.sell(id, acme, 1e6, bytes32(0));
+        claim.sell(bid, sig, bytes32(0));
     }
 
     function test_RevertWhen_BuyerHasNotApproved() public {
         uint256 id = _issue();
+        (InvoiceClaim.Bid memory bid, bytes memory sig) = _bid(id, financier, 9_700e6, bytes32(0));
         vm.prank(acme);
         vm.expectRevert(); // SafeERC20 insufficient allowance
-        claim.sell(id, financier, 9_700e6, bytes32(0));
+        claim.sell(bid, sig, bytes32(0));
     }
 
     function test_SecondaryResaleBetweenFinanciers() public {
@@ -223,15 +266,117 @@ contract InvoiceClaimTest is Test {
 
         vm.prank(financier);
         fusd.approve(address(claim), 9_700e6);
-        vm.prank(acme);
-        claim.sell(id, financier, 9_700e6, bytes32("bid1"));
+        _sell(acme, id, financier, 9_700e6, bytes32("bid1"));
 
         vm.prank(financier2);
         fusd.approve(address(claim), 9_850e6);
-        vm.prank(financier);
-        claim.sell(id, financier2, 9_850e6, bytes32("bid2"));
+        _sell(financier, id, financier2, 9_850e6, bytes32("bid2"));
 
         assertEq(claim.ownerOf(id), financier2);
+    }
+
+    // ------------------------------------------------- sale: the buyer's consent
+
+    /// The attack this signature exists to stop: the buyer approved enough to
+    /// cover face value, signed a bid at 9,700, and the seller asks for 10,000.
+    function test_RevertWhen_SellerChangesThePrice() public {
+        uint256 id = _issue();
+        vm.prank(financier);
+        fusd.approve(address(claim), FACE);
+
+        (InvoiceClaim.Bid memory bid, bytes memory sig) = _bid(id, financier, 9_700e6, "b");
+        bid.price = FACE;
+
+        vm.prank(acme);
+        vm.expectRevert(InvoiceClaim.BadBidSignature.selector);
+        claim.sell(bid, sig, "b");
+    }
+
+    /// A standing allowance must not be spendable on a claim the buyer never bid on.
+    function test_RevertWhen_BidReusedOnAnotherClaim() public {
+        uint256 wanted = _issue();
+        uint256 junk = _issue();
+        vm.prank(financier);
+        fusd.approve(address(claim), FACE * 2);
+
+        (InvoiceClaim.Bid memory bid, bytes memory sig) = _bid(wanted, financier, 9_700e6, "b");
+        bid.id = junk;
+
+        vm.prank(acme);
+        vm.expectRevert(InvoiceClaim.BadBidSignature.selector);
+        claim.sell(bid, sig, "b");
+    }
+
+    function test_RevertWhen_BidSignedBySomeoneElse() public {
+        uint256 id = _issue();
+        vm.prank(financier);
+        fusd.approve(address(claim), FACE);
+
+        (InvoiceClaim.Bid memory bid,) = _bid(id, financier, 9_700e6, "b");
+        bytes memory forged = _sign(FIN2_PK, bid);
+
+        vm.prank(acme);
+        vm.expectRevert(InvoiceClaim.BadBidSignature.selector);
+        claim.sell(bid, forged, "b");
+    }
+
+    function test_RevertWhen_BidExpired() public {
+        uint256 id = _issue();
+        vm.prank(financier);
+        fusd.approve(address(claim), FACE);
+
+        (InvoiceClaim.Bid memory bid, bytes memory sig) = _bid(id, financier, 9_700e6, "b");
+        vm.warp(uint256(bid.deadline) + 1);
+
+        vm.prank(acme);
+        vm.expectRevert(abi.encodeWithSelector(InvoiceClaim.BidExpired.selector, bid.deadline));
+        claim.sell(bid, sig, "b");
+    }
+
+    /// One bid buys one claim once, even if the claim comes back to the seller.
+    function test_RevertWhen_BidReplayed() public {
+        uint256 id = _issue();
+        vm.prank(financier);
+        fusd.approve(address(claim), FACE * 2);
+
+        (InvoiceClaim.Bid memory bid, bytes memory sig) = _bid(id, financier, 9_700e6, "b");
+        vm.prank(acme);
+        claim.sell(bid, sig, "b");
+
+        vm.prank(financier);
+        claim.transferFrom(financier, acme, id);
+
+        vm.prank(acme);
+        vm.expectRevert(abi.encodeWithSelector(InvoiceClaim.BidAlreadyUsed.selector, bytes32("b")));
+        claim.sell(bid, sig, "b");
+    }
+
+    function test_RevertWhen_BidCancelled() public {
+        uint256 id = _issue();
+        vm.prank(financier);
+        fusd.approve(address(claim), FACE);
+
+        (InvoiceClaim.Bid memory bid, bytes memory sig) = _bid(id, financier, 9_700e6, "b");
+        vm.prank(financier);
+        claim.cancelBid("b");
+
+        vm.prank(acme);
+        vm.expectRevert(abi.encodeWithSelector(InvoiceClaim.BidAlreadyUsed.selector, bytes32("b")));
+        claim.sell(bid, sig, "b");
+    }
+
+    /// The seller is paid the signed price, never the allowance.
+    function testFuzz_SellerReceivesExactlyTheSignedPrice(uint64 priceRaw, uint64 extra) public {
+        uint256 price = uint256(priceRaw) % 500_000e6;
+        uint256 id = _issue();
+        vm.prank(financier);
+        fusd.approve(address(claim), price + uint256(extra));
+
+        uint256 before = fusd.balanceOf(acme);
+        _sell(acme, id, financier, price, "b");
+
+        assertEq(fusd.balanceOf(acme), before + price);
+        assertEq(fusd.allowance(financier, address(claim)), uint256(extra));
     }
 
     // -------------------------------------------------------------- settlement
@@ -241,8 +386,9 @@ contract InvoiceClaimTest is Test {
 
         vm.prank(financier);
         fusd.approve(address(claim), 9_700e6);
+        (InvoiceClaim.Bid memory bid, bytes memory sig) = _bid(id, financier, 9_700e6, bytes32("bid"));
         vm.prank(acme);
-        claim.sell(id, financier, 9_700e6, bytes32("bid"));
+        claim.sell(bid, sig, bytes32("bid"));
 
         vm.prank(debtor);
         fusd.approve(address(claim), FACE);
@@ -308,8 +454,9 @@ contract InvoiceClaimTest is Test {
 
         vm.prank(financier);
         fusd.approve(address(claim), price);
+        (InvoiceClaim.Bid memory bid, bytes memory sig) = _bid(id, financier, price, bytes32(0));
         vm.prank(acme);
-        claim.sell(id, financier, price, bytes32(0));
+        claim.sell(bid, sig, bytes32(0));
 
         fusd.mint(debtor, face);
         vm.prank(debtor);

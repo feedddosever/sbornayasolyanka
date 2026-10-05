@@ -13,7 +13,8 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 ///
 /// so the buyer must have approved the claim contract beforehand. That mirrors
 /// how a financier really operates — you grant a standing allowance once, then
-/// fills happen without you signing each one — but it means a demo where nobody
+/// each fill is bounded by the EIP-712 bid you signed for it (claim, price,
+/// deadline), so the holder can never take more — but it means a demo where nobody
 /// ever approved fails at the most important moment with "insufficient
 /// allowance". Run this once per financier key before demoing.
 ///

@@ -20,6 +20,17 @@ import {
   meta,
 } from "./entity";
 
+/**
+ * The financier's EIP-712 signature over the on-chain `Bid`, as it travels in
+ * the entity PAYLOAD. Payload, not attributes: nothing filters on it, and it is
+ * what `InvoiceClaim.sell` needs to move money at the price the buyer chose.
+ * Numbers are decimal strings so the object survives JSON both ways.
+ */
+export interface SignedBidWire {
+  bid: { id: string; buyer: `0x${string}`; price: string; deadline: string; salt: `0x${string}` };
+  signature: `0x${string}`;
+}
+
 export interface LiveBid {
   entityKey: `0x${string}`;
   invoiceId: bigint;
@@ -29,10 +40,13 @@ export interface LiveBid {
   ensName: string;
   expiresAtBlock: bigint;
   secondsLeft: number;
+  /** Absent on an unsigned row (e.g. the evidence script's); such a bid can
+   *  be shown but never filled on-chain. */
+  signed?: SignedBidWire;
 }
 
 /** Post an offer that cancels itself. */
-export async function postBid(privateKey: `0x${string}`, bid: BidInput) {
+export async function postBid(privateKey: `0x${string}`, bid: BidInput, signed?: SignedBidWire) {
   if (bid.ttlSeconds <= 0 || bid.ttlSeconds % 2 !== 0) {
     throw new Error(
       `ttlSeconds must be a positive multiple of 2 (got ${bid.ttlSeconds}); ` +
@@ -43,7 +57,7 @@ export async function postBid(privateKey: `0x${string}`, bid: BidInput) {
   return arkivWallet(privateKey).createEntity({
     payload: jsonToPayload({
       // Not queryable, so nothing here may be needed for filtering.
-      quoteSignature: bid.ensName ? `signed-by:${bid.financier}` : undefined,
+      signed,
       postedAtIso: new Date().toISOString(),
     }),
     contentType: "application/json",
@@ -94,6 +108,7 @@ export async function liveBidsFor(invoiceId: bigint, maxDiscountBps: number): Pr
       ensName: asString(a.ens_name),
       expiresAtBlock: expiresAt,
       secondsLeft: secondsUntil(expiresAt, block),
+      signed: readSigned(e),
     };
   });
 
@@ -124,6 +139,16 @@ export async function liveBidsFor(invoiceId: bigint, maxDiscountBps: number): Pr
   // Arkiv has no ORDER BY, so ranking happens here. Fine for a 50-row page,
   // wrong for a real book - noted in arkiv/feedback.md.
   return bids.sort((a, b) => a.discountBps - b.discountBps);
+}
+
+/** The signed offer from a bid's payload, or undefined if it has none. */
+function readSigned(e: any): SignedBidWire | undefined {
+  try {
+    const signed = e.toJson()?.signed;
+    return signed?.bid && signed?.signature ? signed : undefined;
+  } catch {
+    return undefined; // empty or non-JSON payload
+  }
 }
 
 /** Best live bid, or null if they have all expired. */

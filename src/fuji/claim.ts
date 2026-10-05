@@ -34,7 +34,10 @@ export const fromFusd = (raw: bigint) => formatUnits(raw, FUSD_DECIMALS);
 
 export const claimAbi = parseAbi([
   "function issue(address debtor, uint256 faceValue, uint64 dueDate, bytes32 docHash) returns (uint256)",
-  "function sell(uint256 id, address buyer, uint256 price, bytes32 arkivBidKey)",
+  "struct Bid { uint256 id; address buyer; uint256 price; uint64 deadline; bytes32 salt; }",
+  "function sell(Bid bid, bytes signature, bytes32 arkivBidKey)",
+  "function cancelBid(bytes32 salt)",
+  "function bidUsed(address buyer, bytes32 salt) view returns (bool)",
   "function settle(uint256 id)",
   "function setEligible(address who, bool allowed)",
   "function eligible(address) view returns (bool)",
@@ -51,6 +54,10 @@ export const claimAbi = parseAbi([
   "error AlreadySettled(uint256 id)",
   "error NotDebtor(address caller)",
   "error NotHolder(address caller)",
+  "error SelfPurchase()",
+  "error BidExpired(uint64 deadline)",
+  "error BidAlreadyUsed(bytes32 salt)",
+  "error BadBidSignature()",
 ]);
 
 export const erc20Abi = parseAbi([
@@ -241,16 +248,62 @@ export async function issueInvoice(args: {
 }
 
 /**
- * Accept a bid. `arkivBidKey` is the Arkiv entity key of the offer being
- * filled, recorded on-chain so a judge (or an auditor) can reconcile the trade
- * against the expiring off-chain bid that produced it. This is the seam between
- * the two systems, made verifiable.
+ * A financier's offer as the contract sees it. The BUYER signs this, so the
+ * holder can only ever fill it at the price the buyer chose, on the claim the
+ * buyer chose, before the deadline the buyer chose. Without the signature the
+ * holder picked `price` and could spend any allowance the buyer had granted.
+ */
+export interface SignedBid {
+  id: bigint;
+  buyer: `0x${string}`;
+  price: bigint;
+  deadline: bigint; // unix seconds
+  salt: `0x${string}`;
+}
+
+/** Mirrors `InvoiceClaim.BID_TYPEHASH`. Field order and types must match. */
+export const BID_TYPES = {
+  Bid: [
+    { name: "id", type: "uint256" },
+    { name: "buyer", type: "address" },
+    { name: "price", type: "uint256" },
+    { name: "deadline", type: "uint64" },
+    { name: "salt", type: "bytes32" },
+  ],
+} as const;
+
+/** Mirrors the contract's `EIP712("Factor Invoice Claim", "1")`. */
+export function bidDomain(claim: `0x${string}` = CLAIM_ADDRESS) {
+  return {
+    name: "Factor Invoice Claim",
+    version: "1",
+    chainId: fuji.id,
+    verifyingContract: claim,
+  } as const;
+}
+
+/** Ask the connected wallet to sign a bid. No transaction, no gas. */
+export async function signBid(account: `0x${string}`, bid: SignedBid) {
+  requireAddresses();
+  return fujiWallet().signTypedData({
+    account,
+    domain: bidDomain(),
+    types: BID_TYPES,
+    primaryType: "Bid",
+    message: bid,
+  });
+}
+
+/**
+ * Accept a bid by filling the buyer's signed offer. `arkivBidKey` is the Arkiv
+ * entity key of the offer being filled, recorded on-chain so a judge (or an
+ * auditor) can reconcile the trade against the expiring off-chain bid that
+ * produced it. This is the seam between the two systems, made verifiable.
  */
 export async function acceptBid(args: {
   account: `0x${string}`;
-  id: bigint;
-  buyer: `0x${string}`;
-  priceHuman: string;
+  bid: SignedBid;
+  signature: `0x${string}`;
   arkivBidKey: `0x${string}`;
 }) {
   const wallet = fujiWallet();
@@ -259,7 +312,7 @@ export async function acceptBid(args: {
     address: CLAIM_ADDRESS,
     abi: claimAbi,
     functionName: "sell",
-    args: [args.id, args.buyer, toFusd(args.priceHuman), args.arkivBidKey],
+    args: [args.bid, args.signature, args.arkivBidKey],
   });
 }
 
