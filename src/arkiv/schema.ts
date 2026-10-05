@@ -55,7 +55,11 @@ export const KIND = {
   HANDOVER: "handover",
 } as const;
 
-export type Sector = "logistics" | "manufacturing" | "services" | "retail" | "construction";
+export const SECTORS = ["logistics", "manufacturing", "services", "retail", "construction"] as const;
+export type Sector = (typeof SECTORS)[number];
+
+export const isSector = (s: unknown): s is Sector =>
+  typeof s === "string" && (SECTORS as readonly string[]).includes(s);
 
 // ---------------------------------------------------------------- listings
 

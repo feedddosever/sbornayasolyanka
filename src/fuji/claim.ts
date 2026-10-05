@@ -21,7 +21,11 @@ export const fuji = defineChain({
   id: 43113,
   name: "Avalanche Fuji",
   nativeCurrency: { name: "AVAX", symbol: "AVAX", decimals: 18 },
-  rpcUrls: { default: { http: ["https://api.avax-test.network/ext/bc/C/rpc"] } },
+  rpcUrls: {
+    default: {
+      http: [process.env.NEXT_PUBLIC_FUJI_RPC || "https://api.avax-test.network/ext/bc/C/rpc"],
+    },
+  },
   blockExplorers: {
     default: { name: "Snowtrace", url: "https://testnet.snowtrace.io" },
   },
@@ -291,6 +295,42 @@ export async function signBid(account: `0x${string}`, bid: SignedBid) {
     types: BID_TYPES,
     primaryType: "Bid",
     message: bid,
+  });
+}
+
+/**
+ * What an issuer signs to publish a listing. Only the fields the chain cannot
+ * vouch for: the server reads issuer, debtor, face value, due date and the
+ * document commitment straight from the claim, so they are not signed here
+ * and cannot be forged. Off-chain only — no contract checks this type.
+ */
+export interface ListingTerms {
+  id: bigint;
+  sector: string;
+  ratingBand: number;
+  teaserRef: string;
+  ensName: string;
+}
+
+export const LISTING_TYPES = {
+  Listing: [
+    { name: "id", type: "uint256" },
+    { name: "sector", type: "string" },
+    { name: "ratingBand", type: "uint8" },
+    { name: "teaserRef", type: "string" },
+    { name: "ensName", type: "string" },
+  ],
+} as const;
+
+/** Ask the connected wallet to sign a listing. No transaction, no gas. */
+export async function signListing(account: `0x${string}`, terms: ListingTerms) {
+  requireAddresses();
+  return fujiWallet().signTypedData({
+    account,
+    domain: bidDomain(),
+    types: LISTING_TYPES,
+    primaryType: "Listing",
+    message: terms,
   });
 }
 

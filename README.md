@@ -83,6 +83,25 @@ One consequence worth knowing: since ACT *is* available, `actUploadData(data, gr
 
 Nobody is asked to switch networks during the demo.
 
+### The Arkiv key is Factor's, so every write has to earn it
+
+Arkiv writes are signed and paid for server-side, which makes the two write
+endpoints a way to spend Factor's GLM. Neither trusts the request body:
+
+- `POST /api/arkiv/listings` needs an EIP-712 signature from the claim's
+  **current holder** over the descriptive terms (sector, rating, teaser, ENS
+  name). Issuer, debtor, face value, due date and `docHash` are read from Fuji,
+  never from the body. The claim must be outstanding and not matured, there is
+  one live listing per invoice, and a 128-hex (encrypted, key-bearing) Swarm
+  reference is refused outright.
+- `POST /api/arkiv/bids` needs the financier's signed `Bid`, and only indexes
+  bids the contract could fill: buyer eligible and not the holder, claim live,
+  price at or below face. Price, buyer, discount and lifetime all come from the
+  signature, and the lifetime is capped at an hour.
+- Both are rate-limited per IP (`src/server/guard.ts`). The limiter is in
+  memory, so on a serverless host it is per instance; a shared store is the
+  upgrade when that matters.
+
 ---
 
 ## Run it
@@ -285,6 +304,7 @@ discovering it unexplained is worse than being told.
 - Swarm's ACT revocation is **not retroactive** and anyone holding a reference keeps access, so the document is *delivered* to the buyer, never *un-shared*. Factor does not claim revocation.
 - Bids are ranked client-side because Arkiv has no `ORDER BY`. Correct for a 50-row page, wrong for a real book.
 - `FUSD` is an openly mintable testnet mock with no access control.
+- The write endpoints' rate limit is in memory, per serverless instance — enough to stop a loop draining the Arkiv key, not an exact quota.
 
 ## Where this goes next
 

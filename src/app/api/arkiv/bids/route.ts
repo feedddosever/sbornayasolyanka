@@ -10,8 +10,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { isAddress, isHex, verifyTypedData } from "viem";
 import { postBid, liveBidsFor, type SignedBidWire } from "@/arkiv/bids";
 import { cleanKey } from "@/arkiv/client";
-import type { Sector } from "@/arkiv/schema";
-import { BID_TYPES, CLAIM_ADDRESS, bidDomain, fromFusd } from "@/fuji/claim";
+import { isSector } from "@/arkiv/schema";
+import { BID_TYPES, CLAIM_ADDRESS, bidDomain, fromFusd, isEligible, readInvoice } from "@/fuji/claim";
+import { asUint, bad, isEnsName, jsonBody, rateLimit } from "@/server/guard";
 
 /** Longest lifetime this server will pay to index. A bid is a quote, not a
  *  standing order, and every second of it is GLM spent by Factor's key. */
@@ -19,14 +20,15 @@ const MAX_BID_TTL_SECONDS = 3600;
 
 /** GET /api/arkiv/bids?invoiceId=1&maxDiscountBps=800 */
 export async function GET(req: NextRequest) {
-  const invoiceId = req.nextUrl.searchParams.get("invoiceId");
+  const invoiceId = asUint(req.nextUrl.searchParams.get("invoiceId"));
   const maxBps = Number(req.nextUrl.searchParams.get("maxDiscountBps") ?? 10_000);
-  if (!invoiceId) {
-    return NextResponse.json({ error: "invoiceId required" }, { status: 400 });
+  if (invoiceId === undefined) return bad("invoiceId must be a non-negative integer");
+  if (!Number.isInteger(maxBps) || maxBps < 0 || maxBps > 10_000) {
+    return bad("maxDiscountBps must be 0..10000");
   }
 
   try {
-    const bids = await liveBidsFor(BigInt(invoiceId), maxBps);
+    const bids = await liveBidsFor(invoiceId, maxBps);
     return NextResponse.json({
       bids: bids.map((b) => ({
         ...b,
@@ -42,7 +44,7 @@ export async function GET(req: NextRequest) {
 
 /**
  * POST /api/arkiv/bids
- *   { invoiceId, financierSlot: 1|2, discountBps, sector, ensName,
+ *   { invoiceId, financierSlot: 1|2, sector, ensName,
  *     signed: { bid: { id, buyer, price, deadline, salt }, signature } }
  *
  * The bid must carry the financier's EIP-712 signature over the on-chain
@@ -50,14 +52,21 @@ export async function GET(req: NextRequest) {
  * nobody can post a quote in a financier's name without their wallet, and the
  * price, the buyer and the lifetime that get indexed are the ones that were
  * SIGNED, not whatever else the request body says.
+ *
+ * A signature alone only proves somebody has a wallet, and anybody does. So
+ * before Factor's key pays for the write, the bid must also be one the
+ * contract could fill: the claim outstanding and not matured, the buyer
+ * eligible and not the holder.
  */
 export async function POST(req: NextRequest) {
-  let body: any;
-  try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: "body must be JSON" }, { status: 400 });
-  }
+  const limited = rateLimit(req, "bids", { limit: 20, windowMs: 60_000 });
+  if (limited) return limited;
+
+  const body = await jsonBody(req);
+  if (body instanceof NextResponse) return body;
+  if (!isSector(body.sector)) return bad("unknown sector");
+  const ensName = body.ensName ?? "";
+  if (!isEnsName(ensName)) return bad("ensName is not a valid ENS name");
 
   const checked = await checkSigned(body);
   if ("error" in checked) {
@@ -79,6 +88,31 @@ export async function POST(req: NextRequest) {
       { status: 400 },
     );
   }
+
+  // Would the contract fill this? If not, indexing it is spam on our dime.
+  const buyer = signed.bid.buyer;
+  let face: bigint;
+  try {
+    const [inv, eligible] = await Promise.all([
+      readInvoice(BigInt(signed.bid.id)),
+      isEligible(buyer),
+    ]);
+    if (!inv.holder || inv.settled) return bad(`invoice ${signed.bid.id} is not outstanding`, 404);
+    if (inv.matured) return bad(`invoice ${signed.bid.id} has matured`, 409);
+    if (!eligible) return bad(`${buyer} is not an eligible financier`, 403);
+    if (inv.holder.toLowerCase() === buyer.toLowerCase()) {
+      return bad("the holder cannot bid on its own claim", 409);
+    }
+    face = inv.faceValue;
+  } catch (e: any) {
+    return bad(`could not read the claim on Fuji: ${e?.shortMessage ?? e?.message}`, 502);
+  }
+  if (price > face) return bad("bid price is above face value");
+
+  // Derived from what was signed, so the filterable discount cannot disagree
+  // with the price the contract will actually charge. Whole basis points,
+  // rounded down.
+  const discountBps = Number(((face - price) * 10_000n) / face);
 
   // ONE FUNDED KEY IS ENOUGH.
   //
@@ -111,10 +145,10 @@ export async function POST(req: NextRequest) {
       {
         invoiceId: BigInt(signed.bid.id),
         financier: signed.bid.buyer,
-        discountBps: Number(body.discountBps),
+        discountBps,
         offerPrice: fromFusd(price),
-        sector: body.sector as Sector,
-        ensName: String(body.ensName ?? ""),
+        sector: body.sector,
+        ensName,
         ttlSeconds,
       },
       signed,
@@ -147,7 +181,7 @@ async function checkSigned(
   } catch {
     return { error: "signed.bid id, price and deadline must be integers" };
   }
-  if (String(id) !== String(body.invoiceId)) {
+  if (asUint(body.invoiceId) !== id) {
     return { error: "signed bid is for a different invoice" };
   }
 

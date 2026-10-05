@@ -242,7 +242,6 @@ export default function Market() {
         body: JSON.stringify({
           invoiceId: l.invoiceId,
           financierSlot: slot,
-          discountBps,
           sector: l.sector,
           ensName: `fin${slot}.factor.eth`,
           signed: {
