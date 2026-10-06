@@ -79,6 +79,8 @@ export interface ListingInput {
   docCommit: `0x${string}`; // keccak256 of the encrypted full-invoice ref
   claimContract: `0x${string}`;
   ensName: string; // acme.factor.eth
+  /** Server-checked: does `ensName` resolve to the listing's holder? */
+  ensVerified: boolean;
   sold: boolean;
 }
 
@@ -100,6 +102,7 @@ export function listingAttributes(l: ListingInput) {
     claim_contract: addr(l.claimContract),
     chain_id: i32(43113), // makes the cross-chain link explicit and queryable
     ens_name: str(l.ensName),
+    ens_verified: bool(l.ensVerified),
     sold: bool(l.sold),
   };
 }
@@ -113,6 +116,8 @@ export interface BidInput {
   offerPrice: string; // decimal string
   sector: Sector;
   ensName: string;
+  /** Server-checked: does `ensName` resolve to the financier? */
+  ensVerified: boolean;
   /** Lifetime in seconds. MUST be a positive multiple of 2 - the SDK rejects
    *  odd second counts because a block is 2 seconds. */
   ttlSeconds: number;
@@ -128,6 +133,7 @@ export function bidAttributes(b: BidInput) {
     offer_price: dec(b.offerPrice),
     sector: str(b.sector),
     ens_name: str(b.ensName),
+    ens_verified: bool(b.ensVerified),
   };
 }
 

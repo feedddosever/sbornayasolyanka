@@ -5,6 +5,7 @@ import { cleanKey } from "@/arkiv/client";
 import { isSector } from "@/arkiv/schema";
 import { CLAIM_ADDRESS, LISTING_TYPES, bidDomain, readInvoice } from "@/fuji/claim";
 import { asUint, bad, isEnsName, isPublicSwarmRef, jsonBody, rateLimit } from "@/server/guard";
+import { ensNameIsOwnedBy } from "@/ens/verify";
 import {
   asAddress,
   asBigInt,
@@ -65,6 +66,7 @@ export async function GET(req: NextRequest) {
           teaserRef: asString(a.teaser_ref),
           docCommit: asString(a.doc_commit),
           ensName: asString(a.ens_name),
+          ensVerified: asBool(a.ens_verified),
           sold: asBool(a.sold),
           expiresAtBlock: meta(e).expiresAt.toString(),
         };
@@ -152,6 +154,10 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // Signed proves the holder CHOSE the name, not that they own it. Checked
+  // here and recorded, never used to refuse: see src/ens/verify.ts.
+  const ensVerified = await ensNameIsOwnedBy(ensName, inv.holder);
+
   try {
     const { entityKey, txHash } = await publishListing(pk, {
       invoiceId: id,
@@ -166,9 +172,10 @@ export async function POST(req: NextRequest) {
       docCommit: inv.docHash,
       claimContract: CLAIM_ADDRESS,
       ensName,
+      ensVerified,
       sold: false,
     });
-    return NextResponse.json({ entityKey, txHash });
+    return NextResponse.json({ entityKey, txHash, ensVerified });
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: 500 });
   }

@@ -14,6 +14,7 @@ import { PROJECT } from "./project";
 import {
   asAddress,
   asBigInt,
+  asBool,
   asDecimalString,
   asNumber,
   asString,
@@ -38,6 +39,7 @@ export interface LiveBid {
   discountBps: number;
   offerPrice: string;
   ensName: string;
+  ensVerified: boolean;
   expiresAtBlock: bigint;
   secondsLeft: number;
   /** Absent on an unsigned row (e.g. the evidence script's); such a bid can
@@ -111,6 +113,7 @@ function toLiveBids(entities: readonly any[], block: bigint): LiveBid[] {
       discountBps: asNumber(a.discount_bps),
       offerPrice: asDecimalString(a.offer_price),
       ensName: asString(a.ens_name),
+      ensVerified: asBool(a.ens_verified),
       expiresAtBlock: expiresAt,
       secondsLeft: secondsUntil(expiresAt, block),
       signed: readSigned(e),

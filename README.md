@@ -98,6 +98,10 @@ endpoints a way to spend Factor's GLM. Neither trusts the request body:
   bids the contract could fill: buyer eligible and not the holder, claim live,
   price at or below face. Price, buyer, discount and lifetime all come from the
   signature, and the lifetime is capped at an hour.
+- A signature proves the holder *chose* an ENS name, not that they own it, so
+  both write routes resolve the name on Sepolia (ENSv2 Universal Resolver) and
+  record `ens_verified`. The market badges names ✓ or *unverified*. This flags
+  rather than blocks, so a Sepolia outage degrades a badge, not the market.
 - `POST /api/arkiv/listings/sync` takes a listing out of discovery once Fuji
   says it is sold: the holder is no longer the seller the listing recorded, or
   the claim is settled. It patches `sold` and nothing else, takes no claim from

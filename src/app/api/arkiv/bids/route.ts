@@ -13,6 +13,7 @@ import { cleanKey } from "@/arkiv/client";
 import { isSector } from "@/arkiv/schema";
 import { BID_TYPES, CLAIM_ADDRESS, bidDomain, fromFusd, isEligible, readInvoice } from "@/fuji/claim";
 import { asUint, bad, isEnsName, jsonBody, rateLimit } from "@/server/guard";
+import { ensNameIsOwnedBy } from "@/ens/verify";
 
 /** Longest lifetime this server will pay to index. A bid is a quote, not a
  *  standing order, and every second of it is GLM spent by Factor's key. */
@@ -144,6 +145,8 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  const ensVerified = await ensNameIsOwnedBy(ensName, buyer);
+
   try {
     const { entityKey, txHash } = await postBid(
       pk,
@@ -154,12 +157,13 @@ export async function POST(req: NextRequest) {
         offerPrice: fromFusd(price),
         sector: body.sector,
         ensName,
+        ensVerified,
         ttlSeconds,
       },
       signed,
     );
 
-    return NextResponse.json({ entityKey, txHash, ttlSeconds });
+    return NextResponse.json({ entityKey, txHash, ttlSeconds, ensVerified });
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: 500 });
   }

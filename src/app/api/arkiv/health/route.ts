@@ -238,13 +238,13 @@ export async function GET(req: NextRequest) {
         listingAttributes({
           invoiceId: 1n, issuer: A, holder: A, debtor: A, sector: "logistics",
           faceValue: "1.00", dueDate: 1n, ratingBand: 1, teaserRef: "x",
-          docCommit: B, claimContract: A, ensName: "x", sold: false,
+          docCommit: B, claimContract: A, ensName: "x", ensVerified: false, sold: false,
         }),
       ),
       ...Object.keys(
         bidAttributes({
           invoiceId: 1n, financier: A, discountBps: 1, offerPrice: "1.00",
-          sector: "logistics", ensName: "x", ttlSeconds: 2,
+          sector: "logistics", ensName: "x", ensVerified: false, ttlSeconds: 2,
         }),
       ),
       ...Object.keys(handoverAttributes({ invoiceId: 1n, recipient: A })),

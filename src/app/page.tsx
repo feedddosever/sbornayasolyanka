@@ -47,6 +47,7 @@ interface Listing {
   teaserRef: string;
   docCommit: string;
   ensName: string;
+  ensVerified: boolean;
   sold: boolean;
 }
 
@@ -57,6 +58,7 @@ interface Bid {
   discountBps: number;
   offerPrice: string;
   ensName: string;
+  ensVerified: boolean;
   secondsLeft: number;
   signed?: SignedBidWire;
 }
@@ -494,7 +496,18 @@ export default function Market() {
                     <span className="tag fuji">fuji</span>
                     <span className="tag arkiv">arkiv</span>
                     {l.teaserRef && <span className="tag swarm">swarm</span>}
-                    {l.ensName && <span className="tag ens">{l.ensName}</span>}
+                    {l.ensName && (
+                      <span
+                        className="tag ens"
+                        title={
+                          l.ensVerified
+                            ? "Resolves on Sepolia to the address that listed this claim"
+                            : "Does not resolve to the lister's address: a label, not an identity"
+                        }
+                      >
+                        {l.ensName} {l.ensVerified ? "✓" : "(unverified)"}
+                      </span>
+                    )}
                   </span>
                 </div>
 
@@ -526,7 +539,9 @@ export default function Market() {
                   {live.map((b, i) => (
                     <div className={`bid ${i === 0 ? "best" : ""}`} key={b.entityKey}>
                       <span>
-                        <span className="mono">{b.ensName || b.financier.slice(0, 12)}</span>{" "}
+                        <span className="mono">
+                          {b.ensName && b.ensVerified ? `${b.ensName} ✓` : b.financier.slice(0, 12)}
+                        </span>{" "}
                         — {b.offerPrice} FUSD
                       </span>
                       <span className="k">{(b.discountBps / 100).toFixed(2)}%</span>
