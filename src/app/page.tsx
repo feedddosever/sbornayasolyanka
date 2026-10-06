@@ -137,17 +137,18 @@ export default function Market() {
    * says something changed.
    */
   const refreshBids = useCallback(async () => {
+    // ONE query for the whole book, grouped here, rather than one per listing:
+    // the cost of a refresh no longer grows with the number of cards on screen.
     const next: Record<string, Bid[]> = {};
-    await Promise.all(
-      listings.map(async (l) => {
-        try {
-          const r = await fetch(`/api/arkiv/bids?invoiceId=${l.invoiceId}`).then((x) => x.json());
-          next[l.invoiceId] = r.bids ?? [];
-        } catch {
-          next[l.invoiceId] = [];
-        }
-      }),
-    );
+    for (const l of listings) next[l.invoiceId] = [];
+    try {
+      const r = await fetch(`/api/arkiv/bids`).then((x) => x.json());
+      for (const b of (r.bids ?? []) as Bid[]) {
+        if (next[b.invoiceId]) next[b.invoiceId].push(b); // already ranked by the server
+      }
+    } catch {
+      /* keep the empty book; the next event or reconnect retries */
+    }
     setBids(next);
     setFetchedAt(Date.now());
   }, [listings]);

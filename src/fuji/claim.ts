@@ -89,7 +89,12 @@ export function requireAddresses() {
   }
 }
 
-export const fujiPublic = createPublicClient({ chain: fuji, transport: http() });
+/** `batch: true` folds concurrent reads (the market reads two per listing)
+ *  into one JSON-RPC request instead of one HTTP round trip each. */
+export const fujiPublic = createPublicClient({
+  chain: fuji,
+  transport: http(undefined, { batch: { wait: 16 } }),
+});
 
 /** Browser wallet, for the one layer where a real signature belongs.
  *  Arkiv writes use an in-app signer and ENS setup is a pre-run script, so the

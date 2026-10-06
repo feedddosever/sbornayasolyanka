@@ -94,7 +94,12 @@ export async function liveBidsFor(invoiceId: bigint, maxDiscountBps: number): Pr
     .limit(50)
     .fetch();
 
-  const bids: LiveBid[] = page.entities.map((e: any) => {
+  return rank(toLiveBids(page.entities, block));
+}
+
+/** Entities from a bid query, read back into `LiveBid`s. */
+function toLiveBids(entities: readonly any[], block: bigint): LiveBid[] {
+  const bids: LiveBid[] = entities.map((e: any) => {
     const a = e.attributes ?? {};
     // `expiresAt` is a TOP-LEVEL property on the entity, not an attribute.
     // You filter on `$expiresAt` in the query but you read `e.expiresAt`.
@@ -136,9 +141,36 @@ export async function liveBidsFor(invoiceId: bigint, maxDiscountBps: number): Pr
     );
   }
 
-  // Arkiv has no ORDER BY, so ranking happens here. Fine for a 50-row page,
-  // wrong for a real book - noted in arkiv/feedback.md.
+  return bids;
+}
+
+/** Arkiv has no ORDER BY, so ranking happens here. Fine for a page of rows,
+ *  wrong for a real book - noted in arkiv/feedback.md. */
+function rank(bids: LiveBid[]): LiveBid[] {
   return bids.sort((a, b) => a.discountBps - b.discountBps);
+}
+
+/**
+ * Every live bid in the project, in ONE query.
+ *
+ * The market used to run liveBidsFor once per listing on every stream event,
+ * so a page of N listings cost N Arkiv queries per event, and the stream
+ * carries every team's writes on this shared testnet. One project-wide query
+ * costs the same however many listings are on screen; the caller groups by
+ * invoice. 200 is the SDK's page ceiling, far above a demo book.
+ */
+export async function allLiveBids(): Promise<LiveBid[]> {
+  const block = await currentBlock();
+  const page = await arkivPublic
+    .select({ key: true, attributes: true, payload: true, expiresAt: true })
+    .where(
+      eq(PROJECT.key, str(PROJECT.value)),
+      eq("kind", str(KIND.BID)),
+      gt("$expiresAt", u64(block)),
+    )
+    .limit(200)
+    .fetch();
+  return rank(toLiveBids(page.entities, block));
 }
 
 /** The signed offer from a bid's payload, or undefined if it has none. */

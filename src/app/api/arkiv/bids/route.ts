@@ -8,7 +8,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { isAddress, isHex, verifyTypedData } from "viem";
-import { postBid, liveBidsFor, type SignedBidWire } from "@/arkiv/bids";
+import { allLiveBids, postBid, liveBidsFor, type SignedBidWire } from "@/arkiv/bids";
 import { cleanKey } from "@/arkiv/client";
 import { isSector } from "@/arkiv/schema";
 import { BID_TYPES, CLAIM_ADDRESS, bidDomain, fromFusd, isEligible, readInvoice } from "@/fuji/claim";
@@ -18,9 +18,13 @@ import { asUint, bad, isEnsName, jsonBody, rateLimit } from "@/server/guard";
  *  standing order, and every second of it is GLM spent by Factor's key. */
 const MAX_BID_TTL_SECONDS = 3600;
 
-/** GET /api/arkiv/bids?invoiceId=1&maxDiscountBps=800 */
+/**
+ * GET /api/arkiv/bids?invoiceId=1&maxDiscountBps=800   one invoice's book
+ * GET /api/arkiv/bids                                   every live bid, one query
+ */
 export async function GET(req: NextRequest) {
-  const invoiceId = asUint(req.nextUrl.searchParams.get("invoiceId"));
+  const raw = req.nextUrl.searchParams.get("invoiceId");
+  const invoiceId = raw === null ? null : asUint(raw);
   const maxBps = Number(req.nextUrl.searchParams.get("maxDiscountBps") ?? 10_000);
   if (invoiceId === undefined) return bad("invoiceId must be a non-negative integer");
   if (!Number.isInteger(maxBps) || maxBps < 0 || maxBps > 10_000) {
@@ -28,7 +32,8 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const bids = await liveBidsFor(invoiceId, maxBps);
+    const bids =
+      invoiceId === null ? await allLiveBids() : await liveBidsFor(invoiceId, maxBps);
     return NextResponse.json({
       bids: bids.map((b) => ({
         ...b,
