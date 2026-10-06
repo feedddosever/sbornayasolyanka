@@ -78,6 +78,7 @@ contract InvoiceClaim is ERC721, Ownable, EIP712 {
     error NotHolder(address caller);
     error BadFaceValue();
     error BadDueDate();
+    error BadDebtor(address debtor);
     error SelfPurchase();
     error BidExpired(uint64 deadline);
     error BidAlreadyUsed(bytes32 salt);
@@ -144,6 +145,9 @@ contract InvoiceClaim is ERC721, Ownable, EIP712 {
         if (!eligible[msg.sender]) revert NotEligible(msg.sender);
         if (faceValue == 0) revert BadFaceValue();
         if (dueDate <= block.timestamp) revert BadDueDate();
+        // A zero debtor can never settle, so the claim could never pay out; a
+        // self-owed invoice is not a receivable at all.
+        if (debtor == address(0) || debtor == msg.sender) revert BadDebtor(debtor);
 
         id = nextId++;
         invoices[id] = Invoice({

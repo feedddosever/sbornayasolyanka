@@ -62,6 +62,7 @@ export const claimAbi = parseAbi([
   "error BidExpired(uint64 deadline)",
   "error BidAlreadyUsed(bytes32 salt)",
   "error BadBidSignature()",
+  "error BadDebtor(address debtor)",
 ]);
 
 export const erc20Abi = parseAbi([

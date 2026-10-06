@@ -44,6 +44,7 @@ interface Listing {
   dueDate: number;
   ratingBand: number;
   teaserRef: string;
+  docCommit: string;
   ensName: string;
   sold: boolean;
 }
@@ -539,7 +540,7 @@ export default function Market() {
                 </div>
 
                 <p className="note mono">
-                  docCommit {l.entityKey.slice(0, 22)}… · teaser{" "}
+                  docCommit {l.docCommit.slice(0, 22)}… · teaser{" "}
                   {l.teaserRef ? `${l.teaserRef.slice(0, 18)}…` : "none"}
                 </p>
               </div>

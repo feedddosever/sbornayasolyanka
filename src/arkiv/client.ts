@@ -4,10 +4,11 @@
  * Reads need no funds and no API key. Writes need GLM on the signing account
  * (faucet: hub.arkiv.network).
  *
- * Factor uses TWO write signers on purpose, because an Arkiv entity is owned by
- * the wallet that signed it: the issuer signs listings and handovers, each
- * financier signs their own bids. That makes `$owner` a meaningful filter
- * instead of a constant.
+ * Writes are signed SERVER-SIDE with Factor's own key(s); one funded key is
+ * enough. So `$owner` is always Factor, and "whose row is this" lives in
+ * attributes (`issuer`, `financier`) — vouched for by the user's EIP-712
+ * signature, which the API routes verify before paying for the write. See the
+ * ownership section of arkiv/schema.md and `myLiveBids` in ./bids.ts.
  */
 import { createPublicClient, createWalletClient } from "@arkiv-network/sdk";
 import { tiramisu } from "@arkiv-network/sdk/chains";

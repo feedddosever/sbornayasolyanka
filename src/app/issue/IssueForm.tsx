@@ -121,6 +121,9 @@ export default function IssueForm() {
       // ---- 2. Avalanche: the claim, committing to the document -----------
       setStep("chain");
       const account = await connectWallet(); // also forces the wallet onto Fuji
+      if (debtor.toLowerCase() === account.toLowerCase()) {
+        throw new Error("The debtor must be someone else: an invoice you owe yourself is not a receivable.");
+      }
 
       // The minted id comes from the Issued event in the receipt.
       const { hash: txHash, invoiceId } = await issueInvoice({

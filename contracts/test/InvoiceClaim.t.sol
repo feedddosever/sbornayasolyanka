@@ -136,6 +136,18 @@ contract InvoiceClaimTest is Test {
         claim.issue(debtor, 0, dueDate, bytes32(0));
     }
 
+    function test_RevertWhen_DebtorIsZero() public {
+        vm.prank(acme);
+        vm.expectRevert(abi.encodeWithSelector(InvoiceClaim.BadDebtor.selector, address(0)));
+        claim.issue(address(0), FACE, dueDate, bytes32(0));
+    }
+
+    function test_RevertWhen_IssuerOwesItself() public {
+        vm.prank(acme);
+        vm.expectRevert(abi.encodeWithSelector(InvoiceClaim.BadDebtor.selector, acme));
+        claim.issue(acme, FACE, dueDate, bytes32(0));
+    }
+
     function test_RevertWhen_DueDateInPast() public {
         vm.prank(acme);
         vm.expectRevert(InvoiceClaim.BadDueDate.selector);
