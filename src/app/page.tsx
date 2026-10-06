@@ -17,16 +17,22 @@
  *     FILTER on `$expiresAt` in the query. See src/arkiv/entity.ts.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { toHex } from "viem";
 import { watchWithResync, type StreamStatus } from "@/arkiv/watch";
+import type { SignedBidWire } from "@/arkiv/bids";
 import {
   acceptBid,
   approveFusd,
   connectWallet,
   explorerTx,
+  fromFusd,
+  fujiPublic,
   readInvoice,
   settleInvoice,
+  signBid,
   toBytes32,
   type OnChainInvoice,
+  type SignedBid,
 } from "@/fuji/claim";
 
 interface Listing {
@@ -39,7 +45,9 @@ interface Listing {
   dueDate: number;
   ratingBand: number;
   teaserRef: string;
+  docCommit: string;
   ensName: string;
+  ensVerified: boolean;
   sold: boolean;
 }
 
@@ -50,50 +58,12 @@ interface Bid {
   discountBps: number;
   offerPrice: string;
   ensName: string;
+  ensVerified: boolean;
   secondsLeft: number;
+  signed?: SignedBidWire;
 }
 
 const SECTORS = ["", "logistics", "manufacturing", "services", "retail", "construction"];
-
-/**
- * The demo financiers.
- *
- * These MUST be real, distinct, eligible addresses — not the issuer. `sell()`
- * reverts with `SelfPurchase` when buyer == holder, and the issuer IS the
- * holder immediately after `issue()`, so standing a bid in the issuer's name
- * makes the headline "accept a bid" moment fail on-chain.
- *
- * Each of these also needs a standing FUSD allowance to the claim contract,
- * because `sell()` pulls from the buyer. Run:
- *   PRIVATE_KEY=<financier key> FUSD_ADDRESS=.. CLAIM_ADDRESS=.. \
- *   forge script script/Approve.s.sol --rpc-url fuji --broadcast
- */
-const FINANCIERS: Record<1 | 2, `0x${string}` | undefined> = {
-  1: process.env.NEXT_PUBLIC_FIN1_ADDR as `0x${string}` | undefined,
-  2: process.env.NEXT_PUBLIC_FIN2_ADDR as `0x${string}` | undefined,
-};
-
-/**
- * Stand-ins used only when the real financier addresses are unset.
- *
- * POSTING A BID AND ACCEPTING ONE ARE DIFFERENT ACTS, and an earlier version of
- * this file conflated them. A bid is an Arkiv entity — an index row that never
- * touches a chain — so it does not need an eligible, funded, non-holder
- * address. `sell()` does. Refusing to write the index row because the *later*
- * on-chain step would fail put a configuration error in front of the Arkiv
- * demo, which is the part that works.
- *
- * So the guard moved to where it bites: you can always post a bid, and
- * `accept()` is what refuses a placeholder. Lowercase on purpose — no EIP-55
- * checksum to get wrong.
- */
-const DEMO_FINANCIER: Record<1 | 2, `0x${string}`> = {
-  1: "0x000000000000000000000000000000000000fac1",
-  2: "0x000000000000000000000000000000000000fac2",
-};
-
-const isPlaceholder = (a: string) =>
-  a.toLowerCase() === DEMO_FINANCIER[1] || a.toLowerCase() === DEMO_FINANCIER[2];
 
 export default function Market() {
   const [sector, setSector] = useState("");
@@ -169,17 +139,18 @@ export default function Market() {
    * says something changed.
    */
   const refreshBids = useCallback(async () => {
+    // ONE query for the whole book, grouped here, rather than one per listing:
+    // the cost of a refresh no longer grows with the number of cards on screen.
     const next: Record<string, Bid[]> = {};
-    await Promise.all(
-      listings.map(async (l) => {
-        try {
-          const r = await fetch(`/api/arkiv/bids?invoiceId=${l.invoiceId}`).then((x) => x.json());
-          next[l.invoiceId] = r.bids ?? [];
-        } catch {
-          next[l.invoiceId] = [];
-        }
-      }),
-    );
+    for (const l of listings) next[l.invoiceId] = [];
+    try {
+      const r = await fetch(`/api/arkiv/bids`).then((x) => x.json());
+      for (const b of (r.bids ?? []) as Bid[]) {
+        if (next[b.invoiceId]) next[b.invoiceId].push(b); // already ranked by the server
+      }
+    } catch {
+      /* keep the empty book; the next event or reconnect retries */
+    }
     setBids(next);
     setFetchedAt(Date.now());
   }, [listings]);
@@ -234,52 +205,70 @@ export default function Market() {
     void loadListings();
   }, [loadListings]);
 
+  /**
+   * Stand a bid AS THE CONNECTED WALLET.
+   *
+   * The financier signs an EIP-712 `Bid` naming this claim, the price and a
+   * deadline. That signature is the only thing `sell()` will move money
+   * against, so the issuer can fill the quote but cannot change it. Signing is
+   * free: no transaction, no gas, and nothing on Fuji until the issuer accepts.
+   *
+   * To demo two competing quotes, switch wallet accounts between clicks.
+   */
   async function postDemoBid(l: Listing, slot: 1 | 2, discountBps: number, ttl: number) {
     setBusy(true);
     setErr(null);
     setTxHash(null);
     try {
-      // Unset is not a reason to refuse: an Arkiv bid is an index row, not a
-      // chain call. Fall back, and let accept() be the thing that objects.
-      const financier = FINANCIERS[slot] ?? DEMO_FINANCIER[slot];
-      const usingPlaceholder = !FINANCIERS[slot];
+      const financier = await connectWallet();
+      const onChain = chain[l.invoiceId] ?? (await readInvoice(BigInt(l.invoiceId)));
 
-      const holder = chain[l.invoiceId]?.holder;
-      if (holder && holder.toLowerCase() === financier.toLowerCase()) {
+      if (onChain.holder && onChain.holder.toLowerCase() === financier.toLowerCase()) {
         throw new Error(
-          `Financier ${slot} is the current holder of this claim, so accepting ` +
-            `would revert with SelfPurchase. Use the other financier.`,
+          `The connected wallet holds this claim, so accepting its bid would revert ` +
+            `with SelfPurchase. Switch to a financier account and bid again.`,
         );
       }
 
-      const price = (Number(l.faceValue) * (1 - discountBps / 10_000)).toFixed(2);
+      // Priced off the ON-CHAIN face value, in integer FUSD units: the index
+      // can lag, and a float here would sign a price nobody meant.
+      const bid: SignedBid = {
+        id: onChain.id,
+        buyer: financier,
+        price: (onChain.faceValue * BigInt(10_000 - discountBps)) / 10_000n,
+        deadline: BigInt(Math.floor(Date.now() / 1000) + ttl),
+        salt: toHex(crypto.getRandomValues(new Uint8Array(32))),
+      };
+      const signature = await signBid(financier, bid);
+
       const r = await fetch("/api/arkiv/bids", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           invoiceId: l.invoiceId,
           financierSlot: slot,
-          financier,
-          discountBps,
-          offerPrice: price,
           sector: l.sector,
           ensName: `fin${slot}.factor.eth`,
-          ttlSeconds: ttl,
+          signed: {
+            bid: {
+              id: bid.id.toString(),
+              buyer: bid.buyer,
+              price: bid.price.toString(),
+              deadline: bid.deadline.toString(),
+              salt: bid.salt,
+            },
+            signature,
+          },
         }),
       }).then((x) => x.json());
       if (r.error) setErr(r.error);
       else
         setMsg(
-          `Bid posted, lifetime ${r.ttlSeconds}s — entity ${r.entityKey.slice(0, 18)}…` +
-            (usingPlaceholder
-              ? `  ·  NEXT_PUBLIC_FIN${slot}_ADDR is unset, so this quote stands in ` +
-                `the name of a placeholder address. The Arkiv entity is real and will ` +
-                `expire on its own; accepting it on Fuji will not work until a funded, ` +
-                `eligible financier address is configured.`
-              : ""),
+          `${financier.slice(0, 10)}… signed a bid at ${fromFusd(bid.price)} FUSD, ` +
+            `lifetime ${r.ttlSeconds}s — entity ${r.entityKey.slice(0, 18)}…`,
         );
     } catch (e: any) {
-      setErr(e.message);
+      setErr(humanise(e));
     } finally {
       setBusy(false);
     }
@@ -302,6 +291,9 @@ export default function Market() {
    *
    * The financier switches to their own account in the wallet, clicks this, and
    * the allowance is theirs. Same reasoning as FactorDeployer.sol, one layer up.
+   *
+   * A standing allowance is safe to grant because `sell()` only ever takes the
+   * price the financier SIGNED, on the claim they signed it for.
    */
   async function approveAsFinancier(l: Listing) {
     setBusy(true);
@@ -332,32 +324,32 @@ export default function Market() {
     setBusy(true);
     setErr(null);
     try {
-      // THIS is where a placeholder financier matters. `sell()` pulls the
-      // payment from the buyer, so the buyer must be a real address that is
-      // eligible, funded in FUSD, has granted an allowance, and is not the
-      // current holder. Fail here with the reason rather than letting the
-      // transaction revert and explaining a hex error code on stage.
-      if (isPlaceholder(bid.financier)) {
+      // Rows without a signature (the evidence script writes some) are real
+      // Arkiv entities, but there is nothing the contract can fill them with.
+      if (!bid.signed) {
         throw new Error(
-          `This bid stands in the name of a placeholder financier ` +
-            `(${bid.financier.slice(0, 10)}…), because NEXT_PUBLIC_FIN1_ADDR / ` +
-            `NEXT_PUBLIC_FIN2_ADDR are not configured. The Arkiv side of the demo ` +
-            `works — the entity is real and expires on its own — but a sale needs a ` +
-            `funded, eligible buyer. Set those two variables to addresses you ` +
-            `control, redeploy, and run script/Approve.s.sol for each.`,
+          `This bid carries no financier signature, so it cannot be filled on-chain. ` +
+            `Bids posted from this page are signed by the connected wallet.`,
         );
       }
 
       const account = await connectWallet();
+      const s = bid.signed.bid;
 
       const hash = await acceptBid({
         account,
-        id: BigInt(l.invoiceId),
-        buyer: bid.financier,
-        priceHuman: bid.offerPrice,
+        bid: {
+          id: BigInt(s.id),
+          buyer: s.buyer,
+          price: BigInt(s.price),
+          deadline: BigInt(s.deadline),
+          salt: s.salt,
+        },
+        signature: bid.signed.signature,
         arkivBidKey: toBytes32(bid.entityKey),
       });
       setTxHash(hash);
+      void syncListing(l, hash);
       setMsg(
         `Sold. The transaction records Arkiv bid ${bid.entityKey.slice(0, 14)}… ` +
           `so the fill can be reconciled against the offer that produced it.`,
@@ -366,6 +358,26 @@ export default function Market() {
       setErr(humanise(e));
     } finally {
       setBusy(false);
+    }
+  }
+
+  /**
+   * Once a sale or settlement is mined, ask the server to mark the listing
+   * sold. The server checks Fuji itself, so this only takes the listing out of
+   * discovery when the chain agrees it should go. Best effort: if it fails,
+   * the next successful sync (or the listing's own expiry) catches up.
+   */
+  async function syncListing(l: Listing, hash: `0x${string}`) {
+    try {
+      await fujiPublic.waitForTransactionReceipt({ hash });
+      await fetch("/api/arkiv/listings/sync", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ invoiceId: l.invoiceId }),
+      });
+      await loadListings();
+    } catch {
+      /* the market still reads the holder from Fuji, so nothing is misstated */
     }
   }
 
@@ -379,6 +391,7 @@ export default function Market() {
       await approveFusd(account, onChain.faceValueHuman);
       const hash = await settleInvoice(account, BigInt(l.invoiceId));
       setTxHash(hash);
+      void syncListing(l, hash);
       setMsg(
         `Settled — holder paid ${onChain.faceValueHuman} FUSD and the claim was burned.`,
       );
@@ -483,7 +496,18 @@ export default function Market() {
                     <span className="tag fuji">fuji</span>
                     <span className="tag arkiv">arkiv</span>
                     {l.teaserRef && <span className="tag swarm">swarm</span>}
-                    {l.ensName && <span className="tag ens">{l.ensName}</span>}
+                    {l.ensName && (
+                      <span
+                        className="tag ens"
+                        title={
+                          l.ensVerified
+                            ? "Resolves on Sepolia to the address that listed this claim"
+                            : "Does not resolve to the lister's address: a label, not an identity"
+                        }
+                      >
+                        {l.ensName} {l.ensVerified ? "✓" : "(unverified)"}
+                      </span>
+                    )}
                   </span>
                 </div>
 
@@ -515,7 +539,9 @@ export default function Market() {
                   {live.map((b, i) => (
                     <div className={`bid ${i === 0 ? "best" : ""}`} key={b.entityKey}>
                       <span>
-                        <span className="mono">{b.ensName || b.financier.slice(0, 12)}</span>{" "}
+                        <span className="mono">
+                          {b.ensName && b.ensVerified ? `${b.ensName} ✓` : b.financier.slice(0, 12)}
+                        </span>{" "}
                         — {b.offerPrice} FUSD
                       </span>
                       <span className="k">{(b.discountBps / 100).toFixed(2)}%</span>
@@ -535,14 +561,14 @@ export default function Market() {
                     disabled={busy}
                     onClick={() => postDemoBid(l, 1, 320, 60)}
                   >
-                    Demo bid 3.20% / 60s
+                    Sign bid 3.20% / 60s
                   </button>
                   <button
                     className="ghost"
                     disabled={busy}
                     onClick={() => postDemoBid(l, 2, 450, 20)}
                   >
-                    Demo bid 4.50% / 20s (watch it lapse)
+                    Sign bid 4.50% / 20s (watch it lapse)
                   </button>
                   <button className="ghost" disabled={busy} onClick={() => approveAsFinancier(l)}>
                     Approve FUSD as financier
@@ -553,7 +579,7 @@ export default function Market() {
                 </div>
 
                 <p className="note mono">
-                  docCommit {l.entityKey.slice(0, 22)}… · teaser{" "}
+                  docCommit {l.docCommit.slice(0, 22)}… · teaser{" "}
                   {l.teaserRef ? `${l.teaserRef.slice(0, 18)}…` : "none"}
                 </p>
               </div>
@@ -579,6 +605,14 @@ function humanise(e: any): string {
   if (s.includes("AlreadySettled")) return "Rejected on-chain: this invoice is already settled.";
   if (s.includes("NotDebtor")) return "Rejected on-chain: only the named debtor can settle.";
   if (s.includes("NotHolder")) return "Rejected on-chain: only the current holder can sell.";
+  if (s.includes("SelfPurchase")) return "Rejected on-chain: the holder cannot buy its own claim.";
+  if (s.includes("BadBidSignature")) {
+    return "Rejected on-chain: the bid does not match what the financier signed.";
+  }
+  if (s.includes("BidExpired")) return "Rejected on-chain: the financier's signed deadline has passed.";
+  if (s.includes("BidAlreadyUsed")) {
+    return "Rejected on-chain: this bid was already filled or cancelled by the financier.";
+  }
   if (s.includes("insufficient allowance")) {
     return "The buyer has not approved enough FUSD yet.";
   }

@@ -19,10 +19,17 @@ Step 4 matters. Without it, "it is gone" is consistent with "it was never
 really indexed". The historic read shows the entity genuinely occupied the
 index at B1 and left on its own, with nothing deleting it.
 
+The write goes through the same gate as the market page: a bid signed by an
+eligible financier on a real, outstanding invoice. scripts/signed-bid.mjs
+builds it, so set its env first (EVIDENCE_FIN_PK, EVIDENCE_INVOICE_ID,
+NEXT_PUBLIC_CLAIM_ADDRESS). The query below reads Arkiv directly and needs
+none of that.
+
 Usage:  python3 scripts/evidence-rpc.py [base-url]
 """
 
 import json
+import os
 import subprocess
 import sys
 import time
@@ -30,7 +37,7 @@ import time
 RPC = "https://rpc.tiramisu.db-chain.testnet.arkiv.network"
 BASE = sys.argv[1] if len(sys.argv) > 1 else "https://sbornaya-solyanka-9fbt-seven.vercel.app"
 PROJECT = "factor-invoice-market-ethrome-2026"
-INVOICE_ID = 8889
+INVOICE_ID = int(os.environ.get("EVIDENCE_INVOICE_ID", "0"))
 TTL = 40  # seconds; must be even (Arkiv blocks are 2s)
 
 
@@ -78,16 +85,14 @@ def run_query(expiry_block, at=None):
 
 
 def post_bid():
-    payload = {
-        "invoiceId": str(INVOICE_ID),
-        "financierSlot": 1,
-        "financier": "0x2A058020fa86281b6695Fad49c302182ec8aeA34",
-        "discountBps": 450,
-        "offerPrice": "9550.00",
-        "sector": "logistics",
-        "ensName": "evidence.factor.eth",
-        "ttlSeconds": TTL,
-    }
+    # Signed by the financier's own key, exactly as the market page does it.
+    signer = subprocess.run(
+        ["node", os.path.join(os.path.dirname(__file__), "signed-bid.mjs"), str(TTL)],
+        capture_output=True, text=True,
+    )
+    if signer.returncode != 0:
+        raise RuntimeError(f"could not sign the bid: {signer.stderr.strip()}")
+    payload = json.loads(signer.stdout)
     out = subprocess.run(
         ["curl", "-sS", "--max-time", "60", "-X", "POST", f"{BASE}/api/arkiv/bids",
          "-H", "content-type: application/json", "-d", json.dumps(payload)],
@@ -100,6 +105,9 @@ def post_bid():
 
 
 def main():
+    if not INVOICE_ID:
+        print("set EVIDENCE_INVOICE_ID to an outstanding invoice (see scripts/signed-bid.mjs)")
+        return 1
     print("\n=== Factor / Arkiv Mission 02 — independent RPC witness ===\n")
     print(f"  rpc     : {RPC}")
     print(f"  project : {PROJECT}")

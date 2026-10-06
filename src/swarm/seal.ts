@@ -32,12 +32,21 @@ import { sha256 } from "@noble/hashes/sha256";
 import { randomBytes } from "@noble/hashes/utils";
 import { bytesToHex, hexToBytes, keccak256, toHex } from "viem";
 
-const INFO = new TextEncoder().encode("factor/handover/v1");
+const INFO = new TextEncoder().encode("factor/handover/v2");
 
-function deriveKey(sharedSecret: Uint8Array, ephPub: Uint8Array): Uint8Array {
-  // Bind the derived key to the ephemeral public key so a ciphertext cannot be
-  // replayed under a different ephemeral point.
-  return hkdf(sha256, sharedSecret, ephPub, INFO, 32);
+function deriveKey(
+  sharedSecret: Uint8Array,
+  ephPub: Uint8Array,
+  recipientPub: Uint8Array,
+): Uint8Array {
+  // Bind the derived key to the ephemeral public key (salt) so a ciphertext
+  // cannot be replayed under a different ephemeral point, and to the
+  // recipient's key (info) so the envelope is only valid for the party it was
+  // sealed to. v1 bound only the ephemeral key.
+  const info = new Uint8Array(INFO.length + recipientPub.length);
+  info.set(INFO, 0);
+  info.set(recipientPub, INFO.length);
+  return hkdf(sha256, sharedSecret, ephPub, info, 32);
 }
 
 /**
@@ -58,7 +67,10 @@ export function sealTo(recipientPubKey: `0x${string}`, plaintext: string): `0x${
   // getSharedSecret returns a 33-byte compressed point; drop the prefix byte
   // and use the x-coordinate, which is the standard ECDH output.
   const shared = secp256k1.getSharedSecret(ephPriv, recipient, true).slice(1);
-  const key = deriveKey(shared, ephPub);
+  // Normalise to uncompressed so a compressed and an uncompressed form of the
+  // same key derive the same envelope key.
+  const recipientUncompressed = secp256k1.ProjectivePoint.fromHex(recipient).toRawBytes(false);
+  const key = deriveKey(shared, ephPub, recipientUncompressed);
 
   const nonce = randomBytes(24);
   const ct = xchacha20poly1305(key, nonce).encrypt(
@@ -83,7 +95,7 @@ export function openSealed(recipientPrivKey: `0x${string}`, sealed: `0x${string}
 
   const priv = hexToBytes(recipientPrivKey);
   const shared = secp256k1.getSharedSecret(priv, ephPub, true).slice(1);
-  const key = deriveKey(shared, ephPub);
+  const key = deriveKey(shared, ephPub, secp256k1.getPublicKey(priv, false));
 
   const pt = xchacha20poly1305(key, nonce).decrypt(ct);
   return new TextDecoder().decode(pt);

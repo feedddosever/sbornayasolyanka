@@ -33,12 +33,14 @@ Acme signs in with a passkey              → Swarm ID, no wallet, no seed phras
   publishes a listing                     → Arkiv, queryable, self-pruning
 
 Financiers discover it                    → 5-clause compound Arkiv query
-  post bids with 60s lifetimes            → Arkiv, expiry is the cancel mechanism
+  sign bids (EIP-712, price + deadline)   → wallet signature, no gas
+  post them with 60s lifetimes            → Arkiv, expiry is the cancel mechanism
   one bid expires, untouched               → no delete call, no reaper job
 
-Acme accepts the survivor                 → Fuji sell(), records the Arkiv bid key
+Acme accepts the survivor                 → Fuji sell(signed bid), records the Arkiv bid key
+  a changed price or reused bid fails     → reverts: the buyer's signature binds both
   an ineligible buyer is rejected          → reverts in the ERC-721 transfer hook
-  the document is sealed to the buyer      → ECIES to their ENSv2 pubkey record
+  the document is sealed to the buyer      → ECIES to their ENSv2 pubkey record (not wired yet, see limitations)
 
 The debtor settles at maturity             → holder paid face value, claim burned
 ```
@@ -81,6 +83,33 @@ One consequence worth knowing: since ACT *is* available, `actUploadData(data, gr
 
 Nobody is asked to switch networks during the demo.
 
+### The Arkiv key is Factor's, so every write has to earn it
+
+Arkiv writes are signed and paid for server-side, which makes the two write
+endpoints a way to spend Factor's GLM. Neither trusts the request body:
+
+- `POST /api/arkiv/listings` needs an EIP-712 signature from the claim's
+  **current holder** over the descriptive terms (sector, rating, teaser, ENS
+  name). Issuer, debtor, face value, due date and `docHash` are read from Fuji,
+  never from the body. The claim must be outstanding and not matured, there is
+  one live listing per invoice, and a 128-hex (encrypted, key-bearing) Swarm
+  reference is refused outright.
+- `POST /api/arkiv/bids` needs the financier's signed `Bid`, and only indexes
+  bids the contract could fill: buyer eligible and not the holder, claim live,
+  price at or below face. Price, buyer, discount and lifetime all come from the
+  signature, and the lifetime is capped at an hour.
+- A signature proves the holder *chose* an ENS name, not that they own it, so
+  both write routes resolve the name on Sepolia (ENSv2 Universal Resolver) and
+  record `ens_verified`. The market badges names ✓ or *unverified*. This flags
+  rather than blocks, so a Sepolia outage degrades a badge, not the market.
+- `POST /api/arkiv/listings/sync` takes a listing out of discovery once Fuji
+  says it is sold: the holder is no longer the seller the listing recorded, or
+  the claim is settled. It patches `sold` and nothing else, takes no claim from
+  the caller, and the market page fires it after every sale and settlement.
+- Both are rate-limited per IP (`src/server/guard.ts`). The limiter is in
+  memory, so on a serverless host it is per instance; a shared store is the
+  upgrade when that matters.
+
 ---
 
 ## Run it
@@ -94,12 +123,13 @@ have a key.
 ```bash
 # 1. contracts
 cd contracts
-forge test -vv                      # 28 tests, incl. fuzz over eligibility + settlement
+forge test -vv                      # 37 tests, incl. fuzz over eligibility, settlement + signed price
 forge script script/Deploy.s.sol --rpc-url fuji --broadcast -vvv
 
 # 1b. each financier grants a standing FUSD allowance. `sell()` is called by
 #     the holder but pulls from the buyer, so without this the demo fails at
-#     the moment a bid is accepted. The market page has a button for this too,
+#     the moment a bid is accepted. The allowance is safe to leave standing:
+#     `sell()` only takes the price the buyer signed, on the claim they signed for. The market page has a button for this too,
 #     which is the route to use when the key cannot be exported.
 PRIVATE_KEY=<financier-1-key> FUSD_ADDRESS=0x.. CLAIM_ADDRESS=0x.. \
   forge script script/Approve.s.sol --rpc-url fuji --broadcast
@@ -146,7 +176,8 @@ with `SelfPurchase` when the buyer is the current holder and the issuer holds
 the claim immediately after issuance. `test/FactorDeployer.t.sol` covers that
 and the happy path.
 
-The financiers' FUSD allowances are the one thing this cannot do for you:
+The financiers' FUSD allowances and bid signatures are the things this cannot
+do for you:
 `approve` may only be sent by the token holder itself. Use **Approve FUSD as
 financier** on the market page, once per financier account, or
 `script/Approve.s.sol` if you do have the keys.
@@ -155,7 +186,8 @@ financier** on the market page, once per financier account, or
 
 Health check for the Arkiv wiring — signer address, whether it is funded, and
 whether every attribute name this build writes will be accepted by the engine:
-`GET /api/arkiv/health`.
+`GET /api/arkiv/health`. In production the full report needs
+`?token=<HEALTH_TOKEN>`; without it the endpoint only answers `{ ok, ms }`.
 
 ---
 
@@ -276,11 +308,14 @@ discovering it unexplained is worse than being told.
 
 ## Honest limitations
 
+- **The post-sale document handover is not wired up yet.** `src/swarm/seal.ts` implements and tests the ECIES envelope (`npm test`), but no flow seals the reference to a buyer, posts the handover entity or opens it. The buyer also needs a dedicated sealing key: a browser wallet will not hand over its private key to decrypt with.
+- The rating band on a listing is declared by the issuer. It is signed, so it cannot be forged by anyone else, but nothing independent vouches for it.
 - `setEligible` is owner-controlled. In production that boundary is a KYC process; pretending otherwise would misrepresent the trust model.
 - The oracle for "did the debtor really owe this?" does not exist. `docHash` proves a document was committed to, not that the underlying trade happened.
 - Swarm's ACT revocation is **not retroactive** and anyone holding a reference keeps access, so the document is *delivered* to the buyer, never *un-shared*. Factor does not claim revocation.
 - Bids are ranked client-side because Arkiv has no `ORDER BY`. Correct for a 50-row page, wrong for a real book.
 - `FUSD` is an openly mintable testnet mock with no access control.
+- The write endpoints' rate limit is in memory, per serverless instance — enough to stop a loop draining the Arkiv key, not an exact quota.
 
 ## Where this goes next
 

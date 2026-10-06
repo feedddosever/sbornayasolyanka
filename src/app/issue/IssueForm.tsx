@@ -21,7 +21,8 @@ import {
   lastBeeMode,
 } from "@/swarm/client";
 import { commitToReference } from "@/swarm/seal";
-import { CLAIM_ADDRESS, connectWallet, issueInvoice, explorerTx } from "@/fuji/claim";
+import { connectWallet, issueInvoice, explorerTx, signListing } from "@/fuji/claim";
+import { SECTORS } from "@/arkiv/schema";
 
 type Step = "idle" | "swarm" | "chain" | "index" | "done";
 
@@ -120,6 +121,9 @@ export default function IssueForm() {
       // ---- 2. Avalanche: the claim, committing to the document -----------
       setStep("chain");
       const account = await connectWallet(); // also forces the wallet onto Fuji
+      if (debtor.toLowerCase() === account.toLowerCase()) {
+        throw new Error("The debtor must be someone else: an invoice you owe yourself is not a receivable.");
+      }
 
       // The minted id comes from the Issued event in the receipt.
       const { hash: txHash, invoiceId } = await issueInvoice({
@@ -133,21 +137,29 @@ export default function IssueForm() {
       // ---- 3. Arkiv: the queryable index --------------------------------
       setStep("index");
 
+      // The server pays for this write, so it only accepts a listing the
+      // claim's holder signed. It reads the amounts, dates, parties and the
+      // document commitment from Fuji itself; only the descriptive terms are
+      // ours to state. One more signature, no gas.
+      const terms = {
+        id: invoiceId,
+        sector,
+        ratingBand: Number(rating),
+        teaserRef: teaser.reference,
+        ensName,
+      };
+      const signature = await signListing(account, terms);
+
       const listed = await fetch("/api/arkiv/listings", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           invoiceId: invoiceId.toString(),
-          issuer: account,
-          debtor,
-          sector,
-          faceValue,
-          dueDate: Math.floor(dueDate.getTime() / 1000),
-          ratingBand: Number(rating),
-          teaserRef: teaser.reference,
-          docCommit,
-          claimContract: CLAIM_ADDRESS,
-          ensName,
+          sector: terms.sector,
+          ratingBand: terms.ratingBand,
+          teaserRef: terms.teaserRef,
+          ensName: terms.ensName,
+          signature,
         }),
       }).then((r) => r.json());
 
@@ -208,7 +220,13 @@ export default function IssueForm() {
         </label>
         <label>
           Sector
-          <input value={sector} onChange={(e) => setSector(e.target.value)} />
+          <select value={sector} onChange={(e) => setSector(e.target.value)}>
+            {SECTORS.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
         </label>
         <label>
           Rating band (1-5)

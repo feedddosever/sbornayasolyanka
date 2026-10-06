@@ -65,6 +65,7 @@ async function main() {
     offerPrice: "9680.00",
     sector: "logistics",
     ensName: "evidence.factor.eth",
+    ensVerified: false,
     ttlSeconds: TTL_SECONDS,
   });
   console.log(`           entity ${entityKey}`);

@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  app:
+    name: Typecheck and build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: Evidence scripts parse
+        run: |
+          node --check scripts/signed-bid.mjs
+          node --check scripts/evidence-ws.mjs
+          python3 -m py_compile scripts/evidence-rpc.py
+
+  contracts:
+    name: Foundry tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: foundry-rs/foundry-toolchain@v1
+      # contracts/lib is gitignored, so restore the vendored libs as the
+      # .gitignore note says. OpenZeppelin must be v5: InvoiceClaim overrides
+      # the v5 `_update` hook.
+      - name: Install libraries
+        run: forge install --no-git foundry-rs/forge-std@v1.9.4 OpenZeppelin/openzeppelin-contracts@v5.1.0
+      - run: forge build --sizes
+      - run: forge test -vv

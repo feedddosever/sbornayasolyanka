@@ -9,6 +9,7 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test \"src/**/*.test.ts\"",
     "evidence": "tsx scripts/evidence.ts",
     "ens:setup": "tsx scripts/ens-setup.ts",
     "contracts:test": "cd contracts && forge test -vv",

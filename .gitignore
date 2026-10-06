@@ -14,3 +14,4 @@ contracts/lib/
 
 # Keep the vendored libs out of git; restore with:
 #   cd contracts && forge install foundry-rs/forge-std OpenZeppelin/openzeppelin-contracts
+*.tsbuildinfo

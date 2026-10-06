@@ -48,6 +48,7 @@ import { createPublicClient } from "@arkiv-network/sdk";
 import { tiramisu } from "@arkiv-network/sdk/chains";
 import { webSocket } from "viem";
 import { ARKIV_WS } from "./client";
+import { throttledRunner } from "./throttle";
 
 /**
  * A client that can actually hold a subscription. Note the transport.
@@ -144,27 +145,26 @@ export function watchWithResync(
     onStatus?: (s: StreamStatus) => void;
     onEvent?: (e: LiveEvent) => void;
     debounceMs?: number;
+    minIntervalMs?: number;
     maxBackoffMs?: number;
   } = {},
 ): WatchHandle {
   const debounceMs = opts.debounceMs ?? 250;
+  const minInterval = opts.minIntervalMs ?? 3_000;
   const maxBackoff = opts.maxBackoffMs ?? 15_000;
 
   let handle: WatchHandle | null = null;
   let stopped = false;
   let attempt = 0;
-  let timer: ReturnType<typeof setTimeout> | null = null;
 
   const status = (s: StreamStatus) => opts.onStatus?.(s);
 
-  /** Collapse a burst of events into one query. */
-  const scheduleResync = () => {
-    if (timer) clearTimeout(timer);
-    timer = setTimeout(() => {
-      timer = null;
-      void resync().catch(() => {});
-    }, debounceMs);
-  };
+  /** One query per burst, and at most one per `minInterval`; see ./throttle.ts. */
+  const resyncer = throttledRunner(() => void resync().catch(() => {}), {
+    debounceMs,
+    minIntervalMs: minInterval,
+  });
+  const scheduleResync = () => resyncer.schedule();
 
   const connect = () => {
     if (stopped) return;
@@ -204,7 +204,7 @@ export function watchWithResync(
   return {
     stop: () => {
       stopped = true;
-      if (timer) clearTimeout(timer);
+      resyncer.cancel();
       handle?.stop();
       status("stopped");
     },

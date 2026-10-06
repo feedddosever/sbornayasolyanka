@@ -10,8 +10,14 @@
  * ADDRESS is public information and is exactly what you need in order to check
  * funding at hub.arkiv.network, so it is included deliberately. The access key
  * is reported as a boolean and a length, never as a value.
+ *
+ * Even so, the full report (signer, balance, the shape of every key variable)
+ * is a map for anyone wanting to drain or impersonate the signer, so in
+ * production it needs `?token=` matching HEALTH_TOKEN. Without the token a
+ * production deployment answers `{ ok, ms }` only — still a usable liveness
+ * probe. Development always gets the full report.
  */
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { privateKeyToAccount } from "viem/accounts";
 import { eq } from "@arkiv-network/sdk/query";
 import { str } from "@arkiv-network/sdk/attr";
@@ -89,8 +95,16 @@ function shape(name: string, raw: string | undefined) {
   };
 }
 
-export async function GET() {
+/** The full report in development, or in production with the right token. */
+function wantsDetail(req: NextRequest): boolean {
+  if (process.env.NODE_ENV !== "production") return true;
+  const token = process.env.HEALTH_TOKEN;
+  return Boolean(token) && req.nextUrl.searchParams.get("token") === token;
+}
+
+export async function GET(req: NextRequest) {
   const started = Date.now();
+  const detailed = wantsDetail(req);
 
   // Trimmed, exactly as the write paths read it, so health and the app can
   // never disagree about whether a key is usable.
@@ -160,7 +174,10 @@ export async function GET() {
       error: e?.message ?? String(e),
       hint: "If this fails, nothing else can work. Check ARKIV_API_KEY is a key and not a URL.",
     };
-    return NextResponse.json({ ok: false, ...report, ms: Date.now() - started }, { status: 503 });
+    return NextResponse.json(
+      detailed ? { ok: false, ...report, ms: Date.now() - started } : { ok: false, ms: Date.now() - started },
+      { status: 503 },
+    );
   }
 
   // 2. Can the signer actually pay for a write?
@@ -219,15 +236,15 @@ export async function GET() {
     const names = [
       ...Object.keys(
         listingAttributes({
-          invoiceId: 1n, issuer: A, debtor: A, sector: "logistics",
+          invoiceId: 1n, issuer: A, holder: A, debtor: A, sector: "logistics",
           faceValue: "1.00", dueDate: 1n, ratingBand: 1, teaserRef: "x",
-          docCommit: B, claimContract: A, ensName: "x", sold: false,
+          docCommit: B, claimContract: A, ensName: "x", ensVerified: false, sold: false,
         }),
       ),
       ...Object.keys(
         bidAttributes({
           invoiceId: 1n, financier: A, discountBps: 1, offerPrice: "1.00",
-          sector: "logistics", ensName: "x", ttlSeconds: 2,
+          sector: "logistics", ensName: "x", ensVerified: false, ttlSeconds: 2,
         }),
       ),
       ...Object.keys(handoverAttributes({ invoiceId: 1n, recipient: A })),
@@ -269,7 +286,8 @@ export async function GET() {
   const checks = report.checks as Record<string, { ok: boolean }>;
   const ok = Object.values(checks).every((c) => c.ok);
 
-  return NextResponse.json({ ok, ...report, ms: Date.now() - started }, {
-    status: ok ? 200 : 503,
-  });
+  return NextResponse.json(
+    detailed ? { ok, ...report, ms: Date.now() - started } : { ok, ms: Date.now() - started },
+    { status: ok ? 200 : 503 },
+  );
 }
