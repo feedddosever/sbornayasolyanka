@@ -40,7 +40,7 @@ Financiers discover it                    → 5-clause compound Arkiv query
 Acme accepts the survivor                 → Fuji sell(signed bid), records the Arkiv bid key
   a changed price or reused bid fails     → reverts: the buyer's signature binds both
   an ineligible buyer is rejected          → reverts in the ERC-721 transfer hook
-  the document is sealed to the buyer      → ECIES to their ENSv2 pubkey record
+  the document is sealed to the buyer      → ECIES to their ENSv2 pubkey record (not wired yet, see limitations)
 
 The debtor settles at maturity             → holder paid face value, claim burned
 ```
@@ -115,7 +115,7 @@ have a key.
 ```bash
 # 1. contracts
 cd contracts
-forge test -vv                      # 35 tests, incl. fuzz over eligibility, settlement + signed price
+forge test -vv                      # 37 tests, incl. fuzz over eligibility, settlement + signed price
 forge script script/Deploy.s.sol --rpc-url fuji --broadcast -vvv
 
 # 1b. each financier grants a standing FUSD allowance. `sell()` is called by
@@ -178,7 +178,8 @@ financier** on the market page, once per financier account, or
 
 Health check for the Arkiv wiring — signer address, whether it is funded, and
 whether every attribute name this build writes will be accepted by the engine:
-`GET /api/arkiv/health`.
+`GET /api/arkiv/health`. In production the full report needs
+`?token=<HEALTH_TOKEN>`; without it the endpoint only answers `{ ok, ms }`.
 
 ---
 
@@ -299,6 +300,8 @@ discovering it unexplained is worse than being told.
 
 ## Honest limitations
 
+- **The post-sale document handover is not wired up yet.** `src/swarm/seal.ts` implements and tests the ECIES envelope (`npm test`), but no flow seals the reference to a buyer, posts the handover entity or opens it. The buyer also needs a dedicated sealing key: a browser wallet will not hand over its private key to decrypt with.
+- The rating band on a listing is declared by the issuer. It is signed, so it cannot be forged by anyone else, but nothing independent vouches for it.
 - `setEligible` is owner-controlled. In production that boundary is a KYC process; pretending otherwise would misrepresent the trust model.
 - The oracle for "did the debtor really owe this?" does not exist. `docHash` proves a document was committed to, not that the underlying trade happened.
 - Swarm's ACT revocation is **not retroactive** and anyone holding a reference keeps access, so the document is *delivered* to the buyer, never *un-shared*. Factor does not claim revocation.
