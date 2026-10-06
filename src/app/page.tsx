@@ -26,6 +26,7 @@ import {
   connectWallet,
   explorerTx,
   fromFusd,
+  fujiPublic,
   readInvoice,
   settleInvoice,
   signBid,
@@ -345,6 +346,7 @@ export default function Market() {
         arkivBidKey: toBytes32(bid.entityKey),
       });
       setTxHash(hash);
+      void syncListing(l, hash);
       setMsg(
         `Sold. The transaction records Arkiv bid ${bid.entityKey.slice(0, 14)}… ` +
           `so the fill can be reconciled against the offer that produced it.`,
@@ -353,6 +355,26 @@ export default function Market() {
       setErr(humanise(e));
     } finally {
       setBusy(false);
+    }
+  }
+
+  /**
+   * Once a sale or settlement is mined, ask the server to mark the listing
+   * sold. The server checks Fuji itself, so this only takes the listing out of
+   * discovery when the chain agrees it should go. Best effort: if it fails,
+   * the next successful sync (or the listing's own expiry) catches up.
+   */
+  async function syncListing(l: Listing, hash: `0x${string}`) {
+    try {
+      await fujiPublic.waitForTransactionReceipt({ hash });
+      await fetch("/api/arkiv/listings/sync", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ invoiceId: l.invoiceId }),
+      });
+      await loadListings();
+    } catch {
+      /* the market still reads the holder from Fuji, so nothing is misstated */
     }
   }
 
@@ -366,6 +388,7 @@ export default function Market() {
       await approveFusd(account, onChain.faceValueHuman);
       const hash = await settleInvoice(account, BigInt(l.invoiceId));
       setTxHash(hash);
+      void syncListing(l, hash);
       setMsg(
         `Settled — holder paid ${onChain.faceValueHuman} FUSD and the claim was burned.`,
       );

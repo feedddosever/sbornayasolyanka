@@ -66,6 +66,10 @@ export const isSector = (s: unknown): s is Sector =>
 export interface ListingInput {
   invoiceId: bigint; // joins to the Fuji ERC-721 token id
   issuer: `0x${string}`;
+  /** Who held the claim when it was listed: the seller this listing speaks
+   *  for. Equal to `issuer` on a first listing, a financier on a resale. The
+   *  listing is sold once the on-chain holder is anyone else. */
+  holder: `0x${string}`;
   debtor: `0x${string}`;
   sector: Sector;
   faceValue: string; // decimal string, e.g. "12500.00"
@@ -85,6 +89,7 @@ export function listingAttributes(l: ListingInput) {
     kind: str(KIND.LISTING),
     invoice_id: u256(l.invoiceId),
     issuer: addr(l.issuer),
+    holder: addr(l.holder),
     debtor: addr(l.debtor),
     sector: str(l.sector),
     face_value: dec(l.faceValue), // dec so financiers can range-filter

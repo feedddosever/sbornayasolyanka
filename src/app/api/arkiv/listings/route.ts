@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isHex, verifyTypedData } from "viem";
-import { discover, listingFor, publishListing } from "@/arkiv/listings";
+import { discover, openListingFor, publishListing } from "@/arkiv/listings";
 import { cleanKey } from "@/arkiv/client";
 import { isSector } from "@/arkiv/schema";
 import { CLAIM_ADDRESS, LISTING_TYPES, bidDomain, readInvoice } from "@/fuji/claim";
@@ -88,7 +88,7 @@ export async function GET(req: NextRequest) {
  *   - issuer, debtor, face value, due date and the document commitment are
  *     read from the chain, never from the body, so the index cannot disagree
  *     with the asset it points at
- *   - one live listing per invoice
+ *   - one unsold listing per invoice; a new holder may list it again
  */
 export async function POST(req: NextRequest) {
   const limited = rateLimit(req, "listings", { limit: 5, windowMs: 60_000 });
@@ -138,7 +138,7 @@ export async function POST(req: NextRequest) {
 
   // Checked last, because it is the one network read that costs the most.
   try {
-    if (await listingFor(id)) return bad(`invoice ${id} already has a live listing`, 409);
+    if (await openListingFor(id)) return bad(`invoice ${id} already has a live listing`, 409);
   } catch {
     /* index unreachable: the write below will say so */
   }
@@ -156,6 +156,7 @@ export async function POST(req: NextRequest) {
     const { entityKey, txHash } = await publishListing(pk, {
       invoiceId: id,
       issuer: inv.issuer,
+      holder: inv.holder,
       debtor: inv.debtor,
       sector: b.sector,
       faceValue: inv.faceValueHuman,

@@ -75,6 +75,49 @@ export async function discover(f: DiscoveryFilter) {
   return page;
 }
 
+/**
+ * The UNSOLD listing for an invoice, if there is one. A claim can be listed
+ * again after a sale (a financier reselling it), so "is it listed" means "is
+ * there an unsold listing", not "has it ever been listed".
+ */
+export async function openListingFor(invoiceId: bigint) {
+  const page = await arkivPublic
+    .select({ key: true, attributes: true, expiresAt: true })
+    .where(
+      eq(PROJECT.key, str(PROJECT.value)),
+      eq("kind", str(KIND.LISTING)),
+      eq("invoice_id", u256(invoiceId)),
+      eq("sold", bool(false)),
+    )
+    .limit(1)
+    .fetch();
+  return page.entities[0] ?? null;
+}
+
+/**
+ * Has this listing been sold, according to the chain? True once the claim's
+ * on-chain holder is not the seller the listing recorded, or the claim is gone
+ * (settled and burned). Listings written before `holder` existed fall back to
+ * `issuer`, which is who listed them.
+ */
+export function listingIsSold(
+  listing: { holder?: string; issuer: string },
+  chain: { holder: string | null; settled: boolean },
+): boolean {
+  if (!chain.holder || chain.settled) return true;
+  const seller = (listing.holder || listing.issuer).toLowerCase();
+  return chain.holder.toLowerCase() !== seller;
+}
+
+/**
+ * Take a listing out of discovery. A patch, not a delete: the entity keeps
+ * its history and expires on its own schedule, and only `sold` changes. Must
+ * be signed by the key that created the listing (its `$owner`).
+ */
+export async function markListingSold(privateKey: `0x${string}`, entityKey: `0x${string}`) {
+  return arkivWallet(privateKey).patchEntity({ entityKey, set: { sold: bool(true) } });
+}
+
 /** One listing by on-chain token id. */
 export async function listingFor(invoiceId: bigint) {
   const page = await arkivPublic

@@ -236,7 +236,7 @@ export async function GET(req: NextRequest) {
     const names = [
       ...Object.keys(
         listingAttributes({
-          invoiceId: 1n, issuer: A, debtor: A, sector: "logistics",
+          invoiceId: 1n, issuer: A, holder: A, debtor: A, sector: "logistics",
           faceValue: "1.00", dueDate: 1n, ratingBand: 1, teaserRef: "x",
           docCommit: B, claimContract: A, ensName: "x", sold: false,
         }),

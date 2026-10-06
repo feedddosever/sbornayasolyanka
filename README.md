@@ -98,6 +98,10 @@ endpoints a way to spend Factor's GLM. Neither trusts the request body:
   bids the contract could fill: buyer eligible and not the holder, claim live,
   price at or below face. Price, buyer, discount and lifetime all come from the
   signature, and the lifetime is capped at an hour.
+- `POST /api/arkiv/listings/sync` takes a listing out of discovery once Fuji
+  says it is sold: the holder is no longer the seller the listing recorded, or
+  the claim is settled. It patches `sold` and nothing else, takes no claim from
+  the caller, and the market page fires it after every sale and settlement.
 - Both are rate-limited per IP (`src/server/guard.ts`). The limiter is in
   memory, so on a serverless host it is per instance; a shared store is the
   upgrade when that matters.
