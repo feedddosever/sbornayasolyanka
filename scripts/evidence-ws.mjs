@@ -24,10 +24,14 @@
  * entity on the network from every team sharing the testnet; subscribing
  * unfiltered would wake the UI on other people's writes.
  *
- * Needs Node 22+ for the global WebSocket. No dependencies.
+ * Needs Node 22+ for the global WebSocket. The one write is a bid signed by an
+ * eligible financier on a real invoice, built by ./signed-bid.mjs — set its
+ * env first (EVIDENCE_FIN_PK, EVIDENCE_INVOICE_ID, NEXT_PUBLIC_CLAIM_ADDRESS).
+ * The subscription itself uses no library.
  *
  * Usage: node scripts/evidence-ws.mjs [base-url]
  */
+import { signedBidBody } from "./signed-bid.mjs";
 
 const WS_URL = "wss://rpc.tiramisu.db-chain.testnet.arkiv.network";
 const BASE = process.argv[2] ?? "https://sbornaya-solyanka-9fbt-seven.vercel.app";
@@ -44,34 +48,36 @@ function log(...a) {
   console.log(" ", ...a);
 }
 
-async function postBid(invoiceId) {
+async function postBid(body) {
   const r = await fetch(`${BASE}/api/arkiv/bids`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      invoiceId: String(invoiceId),
-      financierSlot: 1,
-      financier: "0x2A058020fa86281b6695Fad49c302182ec8aeA34",
-      discountBps: 450,
-      offerPrice: "9550.00",
-      sector: "logistics",
-      ensName: "livewire.factor.eth",
-      ttlSeconds: 40,
-    }),
+    body: JSON.stringify(body),
   });
   const d = await r.json();
   if (d.error) throw new Error(`write failed: ${d.error}`);
   return d;
 }
 
-const main = () =>
-  new Promise((resolve) => {
+const main = async () => {
+  // Signed BEFORE the socket opens, so the timed window measures the write and
+  // the event, not a Fuji read. Matching is by entity key, so a real (shared)
+  // invoice id is fine: other bids on it cannot be mistaken for ours.
+  let body;
+  try {
+    body = await signedBidBody({ ttlSeconds: 40, ensName: "livewire.factor.eth" });
+  } catch (err) {
+    console.error(`  could not sign the bid: ${err.message}`);
+    return 1;
+  }
+  const invoiceId = body.invoiceId;
+
+  return new Promise((resolve) => {
     console.log("\n=== Factor / Arkiv Mission 03 — filtered subscription witness ===\n");
     log("socket :", WS_URL);
     log("filter : address =", ENGINE);
     log("         topic0  =", TOPIC_CREATED, "(entity created)\n");
 
-    const invoiceId = 9000 + Math.floor(Math.random() * 900);
     const openedAt = Date.now();
     const ws = new WebSocket(WS_URL);
 
@@ -132,7 +138,7 @@ const main = () =>
         log(`\nwriting one bid (invoice ${invoiceId}) to cause exactly one event ...`);
         postStartedAt = Date.now();
         try {
-          const w = await postBid(invoiceId);
+          const w = await postBid(body);
           respondedAt = Date.now();
           expectedKey = w.entityKey.toLowerCase();
           log(`  write responded after ${respondedAt - postStartedAt}ms`);
@@ -195,5 +201,6 @@ const main = () =>
       resolve(0);
     }
   });
+};
 
 main().then((c) => process.exit(c));
