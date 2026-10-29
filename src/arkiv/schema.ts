@@ -107,6 +107,21 @@ export interface BidInput {
   /** Lifetime in seconds. MUST be a positive multiple of 2 - the SDK rejects
    *  odd second counts because a block is 2 seconds. */
   ttlSeconds: number;
+  /** The financier's EIP-712 signature over the on-chain terms. Absent only
+   *  for placeholder bids, which `sell()` cannot fill. */
+  signed?: SignedBidWire;
+}
+
+/** `InvoiceClaim.Bid` plus its signature, as JSON: integers travel as
+ *  decimal strings because JSON has no bigint. Lives in the bid's payload,
+ *  not its attributes - nothing here is ever filtered on. */
+export interface SignedBidWire {
+  claimId: string;
+  buyer: `0x${string}`;
+  price: string; // raw FUSD units
+  deadline: string; // unix seconds
+  nonce: `0x${string}`;
+  signature: `0x${string}`;
 }
 
 export function bidAttributes(b: BidInput) {

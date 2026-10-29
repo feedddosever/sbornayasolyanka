@@ -21,13 +21,17 @@ import { watchWithResync, type StreamStatus } from "@/arkiv/watch";
 import {
   acceptBid,
   approveFusd,
+  CLAIM_ADDRESS,
   connectWallet,
   explorerTx,
   readInvoice,
   settleInvoice,
+  signBid,
   toBytes32,
+  toFusd,
   type OnChainInvoice,
 } from "@/fuji/claim";
+import type { SignedBidWire } from "@/arkiv/schema";
 
 interface Listing {
   entityKey: string;
@@ -51,6 +55,7 @@ interface Bid {
   offerPrice: string;
   ensName: string;
   secondsLeft: number;
+  signed: SignedBidWire | null;
 }
 
 const SECTORS = ["", "logistics", "manufacturing", "services", "retail", "construction"];
@@ -67,6 +72,9 @@ const SECTORS = ["", "logistics", "manufacturing", "services", "retail", "constr
  * because `sell()` pulls from the buyer. Run:
  *   PRIVATE_KEY=<financier key> FUSD_ADDRESS=.. CLAIM_ADDRESS=.. \
  *   forge script script/Approve.s.sol --rpc-url fuji --broadcast
+ *
+ * The allowance alone moves nothing: `sell()` only fills a bid the financier
+ * signed, so posting a bid means switching the wallet to that financier.
  */
 const FINANCIERS: Record<1 | 2, `0x${string}` | undefined> = {
   1: process.env.NEXT_PUBLIC_FIN1_ADDR as `0x${string}` | undefined,
@@ -86,6 +94,9 @@ const FINANCIERS: Record<1 | 2, `0x${string}` | undefined> = {
  * So the guard moved to where it bites: you can always post a bid, and
  * `accept()` is what refuses a placeholder. Lowercase on purpose — no EIP-55
  * checksum to get wrong.
+ *
+ * A placeholder bid is also UNSIGNED: with no wallet or no deployed contract
+ * there is nothing to sign against, and `sell()` fills signed bids only.
  */
 const DEMO_FINANCIER: Record<1 | 2, `0x${string}`> = {
   1: "0x000000000000000000000000000000000000fac1",
@@ -239,20 +250,47 @@ export default function Market() {
     setErr(null);
     setTxHash(null);
     try {
-      // Unset is not a reason to refuse: an Arkiv bid is an index row, not a
-      // chain call. Fall back, and let accept() be the thing that objects.
-      const financier = FINANCIERS[slot] ?? DEMO_FINANCIER[slot];
-      const usingPlaceholder = !FINANCIERS[slot];
+      // A bid is a promise to pay, so the financier signs it from their own
+      // wallet and `sell()` executes exactly those terms. With no wallet or no
+      // deployed contract there is nothing to sign against: an Arkiv bid is
+      // still an index row, not a chain call, so fall back to an unsigned
+      // placeholder and let accept() be the thing that objects.
+      const canSign =
+        typeof window !== "undefined" && !!(window as any).ethereum && !!CLAIM_ADDRESS;
+      const usingPlaceholder = !canSign;
+
+      let financier: `0x${string}`;
+      if (canSign) {
+        financier = await connectWallet();
+        const expected = FINANCIERS[slot];
+        if (expected && expected.toLowerCase() !== financier.toLowerCase()) {
+          throw new Error(
+            `Switch your wallet to financier ${slot} (${expected.slice(0, 10)}…) to post ` +
+              `this bid. A bid is a signed promise to pay, so only that account can make it.`,
+          );
+        }
+      } else {
+        financier = FINANCIERS[slot] ?? DEMO_FINANCIER[slot];
+      }
 
       const holder = chain[l.invoiceId]?.holder;
       if (holder && holder.toLowerCase() === financier.toLowerCase()) {
         throw new Error(
-          `Financier ${slot} is the current holder of this claim, so accepting ` +
-            `would revert with SelfPurchase. Use the other financier.`,
+          `${financier.slice(0, 10)}… is the current holder of this claim, so accepting ` +
+            `would revert with SelfPurchase. Bid from the other financier's account.`,
         );
       }
 
       const price = (Number(l.faceValue) * (1 - discountBps / 10_000)).toFixed(2);
+      const signedBid = canSign
+        ? await signBid({
+            account: financier,
+            claimId: BigInt(l.invoiceId),
+            priceHuman: price,
+            ttlSeconds: ttl,
+          })
+        : undefined;
+
       const r = await fetch("/api/arkiv/bids", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -265,6 +303,7 @@ export default function Market() {
           sector: l.sector,
           ensName: `fin${slot}.factor.eth`,
           ttlSeconds: ttl,
+          signedBid,
         }),
       }).then((x) => x.json());
       if (r.error) setErr(r.error);
@@ -272,11 +311,11 @@ export default function Market() {
         setMsg(
           `Bid posted, lifetime ${r.ttlSeconds}s — entity ${r.entityKey.slice(0, 18)}…` +
             (usingPlaceholder
-              ? `  ·  NEXT_PUBLIC_FIN${slot}_ADDR is unset, so this quote stands in ` +
-                `the name of a placeholder address. The Arkiv entity is real and will ` +
-                `expire on its own; accepting it on Fuji will not work until a funded, ` +
-                `eligible financier address is configured.`
-              : ""),
+              ? `  ·  No wallet or contract address is available, so this quote is ` +
+                `unsigned and stands in the name of ${financier.slice(0, 10)}…. The Arkiv ` +
+                `entity is real and will expire on its own; accepting it on Fuji needs ` +
+                `a bid signed from the financier's own wallet.`
+              : `  ·  signed by ${financier.slice(0, 10)}… — the only terms sell() will fill.`),
         );
     } catch (e: any) {
       setErr(e.message);
@@ -317,8 +356,8 @@ export default function Market() {
       setTxHash(hash);
       setMsg(
         `${account.slice(0, 10)}… approved ${onChain.faceValueHuman} FUSD to the claim ` +
-          `contract. That account can now have a bid accepted in its name. Switch ` +
-          `wallet accounts and repeat for the second financier.`,
+          `contract. Bids this account signs can now be filled — nothing it has not ` +
+          `signed can be. Switch wallet accounts and repeat for the second financier.`,
       );
     } catch (e: any) {
       setErr(humanise(e));
@@ -348,13 +387,36 @@ export default function Market() {
         );
       }
 
+      // `sell()` fills only terms the buyer signed. An unsigned row is a quote
+      // nobody has committed to, so there is nothing on-chain to execute.
+      const signed = bid.signed;
+      if (!signed) {
+        throw new Error(
+          `This bid carries no financier signature, so there is nothing to execute: ` +
+            `sell() only fills terms the buyer signed. Post a fresh bid from the ` +
+            `financier's own wallet.`,
+        );
+      }
+
+      // The card shows the Arkiv attributes; the chain executes the signature.
+      // If they disagree, refuse rather than let the holder sign for terms
+      // they were not shown.
+      if (
+        signed.claimId !== l.invoiceId ||
+        signed.buyer.toLowerCase() !== bid.financier.toLowerCase() ||
+        BigInt(signed.price) !== toFusd(bid.offerPrice)
+      ) {
+        throw new Error(
+          `This bid's signed terms do not match what it lists (${bid.offerPrice} FUSD ` +
+            `from ${bid.financier.slice(0, 10)}…). Not accepting it.`,
+        );
+      }
+
       const account = await connectWallet();
 
       const hash = await acceptBid({
         account,
-        id: BigInt(l.invoiceId),
-        buyer: bid.financier,
-        priceHuman: bid.offerPrice,
+        signed,
         arkivBidKey: toBytes32(bid.entityKey),
       });
       setTxHash(hash);
@@ -579,6 +641,13 @@ function humanise(e: any): string {
   if (s.includes("AlreadySettled")) return "Rejected on-chain: this invoice is already settled.";
   if (s.includes("NotDebtor")) return "Rejected on-chain: only the named debtor can settle.";
   if (s.includes("NotHolder")) return "Rejected on-chain: only the current holder can sell.";
+  if (s.includes("BadBidSignature")) {
+    return "Rejected on-chain: the buyer did not sign these terms. A sale can only fill a bid the financier signed.";
+  }
+  if (s.includes("BidExpired")) {
+    return "Rejected on-chain: this bid's signed deadline has passed. The quote expired — post a fresh one.";
+  }
+  if (s.includes("BidAlreadyUsed")) return "Rejected on-chain: this bid has already been filled.";
   if (s.includes("insufficient allowance")) {
     return "The buyer has not approved enough FUSD yet.";
   }

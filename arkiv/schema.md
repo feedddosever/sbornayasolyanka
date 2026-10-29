@@ -142,7 +142,10 @@ invoice nobody financed stops cluttering the market without a cleanup job.
 | `sector` | `str` | denormalised so sector queries need no join |
 | `ens_name` | `str` | resolves to a payout address and a sealing key |
 
-Payload: the signed quote blob and a posting timestamp.
+Payload: the financier's EIP-712 signature over the on-chain terms (claim,
+buyer, price, deadline, nonce) and a posting timestamp. `sell()` on Fuji fills
+only those signed terms, so the signature is what makes a bid binding; the
+attributes above are copied from it so the book cannot list anything else.
 
 **Lifetime: 60 seconds, and this is the product.** There is no cancel endpoint
 in this repository because a stale quote stops existing on its own. A financier
@@ -236,8 +239,11 @@ side by side in `src/arkiv/bids.ts` (`myLiveBids` and `bidsSignedBy`), and the
 gap between them *is* the trade-off.
 
 **Factor is therefore a custodial index writer.** One funded Tiramisu key
-writes every row. The consequence is real: a financier cannot prove to a third
-party that a bid was theirs, because they never signed it.
+writes every row. What it cannot do is invent a financier's commitment: the
+terms inside the payload carry the financier's own EIP-712 signature, and the
+Fuji contract refuses to execute anything else. So the money is safe from the
+index writer. What is still custodial is the *row* — Factor decides which
+signed bids get listed, and `$owner` says nothing about the financier.
 
 Two ways to close that, neither done here:
 

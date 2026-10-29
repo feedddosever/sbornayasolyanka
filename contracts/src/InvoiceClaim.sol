@@ -5,6 +5,8 @@ import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
+import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
 
 /// @title InvoiceClaim - a tokenised invoice with a rule, a policy and a settlement
 /// @notice Factor turns an unpaid invoice into a transferable claim an SME can sell
@@ -25,8 +27,32 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 ///      expiry and therefore needs no cancel endpoint. `sell` records the Arkiv
 ///      entity key of the bid it filled, so an on-chain execution can always be
 ///      traced back to the exact off-chain offer that produced it.
-contract InvoiceClaim is ERC721, Ownable {
+///
+/// @dev A bid is a promise to pay, so the financier signs it (EIP-712) and the
+///      signature travels in the Arkiv entity's payload. `sell` executes only
+///      what the buyer signed: this claim, this price, before this deadline,
+///      once. The holder picks WHICH bid to accept, never its terms. An earlier
+///      version took buyer and price as plain arguments, which let any eligible
+///      holder spend any financier's standing allowance on a claim of its
+///      choosing.
+contract InvoiceClaim is ERC721, EIP712, Ownable {
     using SafeERC20 for IERC20;
+
+    /// @notice A financier's offer, signed off-chain.
+    /// @dev `deadline` mirrors the Arkiv entity's lifetime, so a quote stops
+    ///      being executable when it stops being listed. `nonce` is random per
+    ///      bid and makes each signature single-use.
+    struct Bid {
+        uint256 claimId;
+        address buyer;
+        uint256 price;
+        uint64 deadline;
+        bytes32 nonce;
+    }
+
+    bytes32 public constant BID_TYPEHASH = keccak256(
+        "Bid(uint256 claimId,address buyer,uint256 price,uint64 deadline,bytes32 nonce)"
+    );
 
     struct Invoice {
         address debtor; // who owes the money
@@ -47,6 +73,9 @@ contract InvoiceClaim is ERC721, Ownable {
     /// @notice The transfer POLICY. Only eligible accounts may issue or receive claims.
     mapping(address account => bool allowed) public eligible;
 
+    /// @notice Bids already filled, by buyer and nonce.
+    mapping(address buyer => mapping(bytes32 nonce => bool used)) public bidUsed;
+
     error NotEligible(address who);
     error PastMaturity(uint256 id);
     error AlreadySettled(uint256 id);
@@ -55,6 +84,9 @@ contract InvoiceClaim is ERC721, Ownable {
     error BadFaceValue();
     error BadDueDate();
     error SelfPurchase();
+    error BadBidSignature();
+    error BidExpired(uint64 deadline);
+    error BidAlreadyUsed(bytes32 nonce);
 
     event Issued(
         uint256 indexed id,
@@ -70,12 +102,14 @@ contract InvoiceClaim is ERC721, Ownable {
         address indexed from,
         address indexed to,
         uint256 price,
-        bytes32 arkivBidKey
+        bytes32 arkivBidKey,
+        bytes32 bidNonce
     );
     event Settled(uint256 indexed id, address indexed paidTo, uint256 amount);
 
     constructor(IERC20 _stable)
         ERC721("Factor Invoice Claim", "FIC")
+        EIP712("Factor Invoice Claim", "1")
         Ownable(msg.sender)
     {
         stable = _stable;
@@ -130,23 +164,45 @@ contract InvoiceClaim is ERC721, Ownable {
         emit Issued(id, msg.sender, debtor, faceValue, dueDate, docHash);
     }
 
-    /// @notice Sell the claim to a financier who has already approved `price` of `stable`.
+    /// @notice Fill a bid the buyer signed. The buyer must also have approved
+    ///         at least `bid.price` of `stable` to this contract.
+    /// @param signature the buyer's EIP-712 signature over `bid`. ERC-1271
+    ///        contract wallets are accepted as well as EOAs.
     /// @param arkivBidKey the Arkiv entity key of the expiring bid being filled.
     ///        Recorded so the on-chain trade can be reconciled against the
-    ///        off-chain offer book.
-    function sell(uint256 id, address buyer, uint256 price, bytes32 arkivBidKey) external {
+    ///        off-chain offer book; `bid.nonce`, emitted beside it, is the part
+    ///        the buyer signed.
+    function sell(Bid calldata bid, bytes calldata signature, bytes32 arkivBidKey) external {
+        uint256 id = bid.claimId;
         address holder = _requireOwned(id);
         if (msg.sender != holder) revert NotHolder(msg.sender);
-        if (buyer == holder) revert SelfPurchase();
+        if (bid.buyer == holder) revert SelfPurchase();
         if (invoices[id].settled) revert AlreadySettled(id);
         // Eligibility and maturity are enforced in _update; checking the buyer
         // here too gives a clearer revert before any token movement.
-        if (!eligible[buyer]) revert NotEligible(buyer);
+        if (!eligible[bid.buyer]) revert NotEligible(bid.buyer);
+        if (block.timestamp > bid.deadline) revert BidExpired(bid.deadline);
+        if (bidUsed[bid.buyer][bid.nonce]) revert BidAlreadyUsed(bid.nonce);
+        if (!SignatureChecker.isValidSignatureNow(bid.buyer, hashBid(bid), signature)) {
+            revert BadBidSignature();
+        }
 
-        stable.safeTransferFrom(buyer, holder, price);
-        _transfer(holder, buyer, id);
+        bidUsed[bid.buyer][bid.nonce] = true;
+        stable.safeTransferFrom(bid.buyer, holder, bid.price);
+        _transfer(holder, bid.buyer, id);
 
-        emit Sold(id, holder, buyer, price, arkivBidKey);
+        emit Sold(id, holder, bid.buyer, bid.price, arkivBidKey, bid.nonce);
+    }
+
+    /// @notice The EIP-712 digest a financier signs for `bid`.
+    function hashBid(Bid calldata bid) public view returns (bytes32) {
+        return _hashTypedDataV4(
+            keccak256(
+                abi.encode(
+                    BID_TYPEHASH, bid.claimId, bid.buyer, bid.price, bid.deadline, bid.nonce
+                )
+            )
+        );
     }
 
     /// @notice The debtor pays face value to the current holder; the claim retires.

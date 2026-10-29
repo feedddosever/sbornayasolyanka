@@ -19,7 +19,7 @@ Factor does those four things in four places, each chosen because nothing else c
 | **Swarm** | The invoice document, encrypted, owned by the issuer | The only layer that holds a real 2MB PDF, and the only one where the business keeps its own file |
 | **ENSv2** | `acme.factor.eth` — payout address, sealing key, delegated accountant | The only layer that makes a counterparty addressable with *scoped* authority |
 
-The design in one sentence: **the bid is off-chain because it expires; the execution is on-chain because it moves money.** A financier's offer is an Arkiv entity with a 60-second lifetime, so there is no cancel endpoint anywhere in this repository — a stale quote simply stops existing. When the issuer accepts, Fuji executes and the transaction records the Arkiv entity key of the exact bid it filled, so the two systems can always be reconciled.
+The design in one sentence: **the bid is off-chain because it expires; the execution is on-chain because it moves money.** A financier's offer is an Arkiv entity with a 60-second lifetime, so there is no cancel endpoint anywhere in this repository — a stale quote simply stops existing. Each bid carries the financier's EIP-712 signature over its terms, and when the issuer accepts, Fuji executes exactly those terms — the issuer picks *which* bid, never the buyer or the price. The transaction records the Arkiv entity key of the bid it filled, so the two systems can always be reconciled.
 
 ---
 
@@ -33,10 +33,10 @@ Acme signs in with a passkey              → Swarm ID, no wallet, no seed phras
   publishes a listing                     → Arkiv, queryable, self-pruning
 
 Financiers discover it                    → 5-clause compound Arkiv query
-  post bids with 60s lifetimes            → Arkiv, expiry is the cancel mechanism
+  sign bids, post them with 60s lifetimes  → EIP-712 terms in the Arkiv payload, expiry is the cancel mechanism
   one bid expires, untouched               → no delete call, no reaper job
 
-Acme accepts the survivor                 → Fuji sell(), records the Arkiv bid key
+Acme accepts the survivor                 → Fuji sell() fills the signed terms, records the Arkiv bid key
   an ineligible buyer is rejected          → reverts in the ERC-721 transfer hook
   the document is sealed to the buyer      → ECIES to their ENSv2 pubkey record
 
@@ -94,13 +94,14 @@ have a key.
 ```bash
 # 1. contracts
 cd contracts
-forge test -vv                      # 28 tests, incl. fuzz over eligibility + settlement
+forge test -vv                      # 38 tests, incl. signed bids + fuzz over eligibility and settlement
 forge script script/Deploy.s.sol --rpc-url fuji --broadcast -vvv
 
 # 1b. each financier grants a standing FUSD allowance. `sell()` is called by
 #     the holder but pulls from the buyer, so without this the demo fails at
 #     the moment a bid is accepted. The market page has a button for this too,
-#     which is the route to use when the key cannot be exported.
+#     which is the route to use when the key cannot be exported. The allowance
+#     only lets bids the financier SIGNED be filled; nothing else can spend it.
 PRIVATE_KEY=<financier-1-key> FUSD_ADDRESS=0x.. CLAIM_ADDRESS=0x.. \
   forge script script/Approve.s.sol --rpc-url fuji --broadcast
 PRIVATE_KEY=<financier-2-key> FUSD_ADDRESS=0x.. CLAIM_ADDRESS=0x.. \
@@ -149,7 +150,9 @@ and the happy path.
 The financiers' FUSD allowances are the one thing this cannot do for you:
 `approve` may only be sent by the token holder itself. Use **Approve FUSD as
 financier** on the market page, once per financier account, or
-`script/Approve.s.sol` if you do have the keys.
+`script/Approve.s.sol` if you do have the keys. Bids are signed the same way:
+switch the wallet to a financier before pressing that financier's demo-bid
+button, because `sell()` fills only bids their own wallet signed.
 
 **Funding, all of which has latency — do it first:** Fuji AVAX from `core.app/tools/testnet-faucet` (needs a mainnet AVAX balance or an Avalanche Guild coupon; 2 AVAX per 24h), Arkiv GLM from `hub.arkiv.network`, Sepolia ETH **plus MockUSDC** (the ENSv2 ETHRegistrar charges MockUSDC, not ETH).
 
@@ -201,6 +204,15 @@ app's query layer cannot catch that class of bug. This one can.
 
 ## Deployed addresses
 
+> **These addresses run the pre-fix `InvoiceClaim`.** In that version `sell()`
+> took the buyer and the price as plain arguments, so any eligible holder could
+> spend any financier's standing FUSD allowance. The fix — bids signed by the
+> financier (EIP-712) and filled only on those terms — is in this repository but
+> not on these addresses, and the current app cannot trade against them because
+> `sell()`'s signature changed. Redeploy via `/deploy` (or
+> `script/Deploy.s.sol`) and update the table. Testnet mock money only; FUSD is
+> freely mintable, so nothing of value was ever at risk.
+
 | What | Chain | Address |
 |---|---|---|
 | `InvoiceClaim` | Fuji 43113 | [`0x6eCeaF4c89cFE03093Ebc55c2B750386c88c7cC0`](https://testnet.snowtrace.io/address/0x6eCeaF4c89cFE03093Ebc55c2B750386c88c7cC0) |
@@ -230,8 +242,8 @@ the signer. Signed from a browser wallet with no exportable private key, via
 
 Example transactions for issue / sell / rejected transfer / settle: pending. The
 contracts and the funded, eligible parties are on chain; the flow itself is
-covered by the 28 Foundry tests in `contracts/test`, including a fuzz run over
-eligibility and settlement.
+covered by the 38 Foundry tests in `contracts/test`, including the signed-bid
+checks and a fuzz run over eligibility and settlement.
 
 ---
 
@@ -258,21 +270,6 @@ Reconnection is the interesting part: you cannot both replay a gap and stay on a
 **ENS** — ENSv2 beta on Sepolia: a `UserRegistry` deployed via `VerifiableFactory` and wired in with `setSubregistry`, per-business subnames with native registry expiry, a per-account `PermissionedResolver`, and record-level delegation via `authorizeTextRoles` so an accountant can edit one text key and is reverted on the payout address.
 
 ---
-
-## A stale directory, disclosed rather than hidden
-
-`factor/` is a duplicate of this project from early in the weekend, left behind
-when the repository was restructured. **Ignore it**: it is excluded from the
-TypeScript build and nothing imports it. It survives only because removing 32
-files through the GitHub API one commit at a time would have made the history
-less readable than the directory makes the tree. Remove it with:
-
-```bash
-git rm -r factor && git commit -m "remove the stale duplicate" && git push
-```
-
-Naming it here because a reviewer opening the repository will see it, and
-discovering it unexplained is worse than being told.
 
 ## Honest limitations
 

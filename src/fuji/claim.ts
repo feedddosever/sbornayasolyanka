@@ -15,7 +15,9 @@ import {
   defineChain,
   formatUnits,
   parseUnits,
+  toHex,
 } from "viem";
+import type { SignedBidWire } from "@/arkiv/schema";
 
 export const fuji = defineChain({
   id: 43113,
@@ -34,7 +36,10 @@ export const fromFusd = (raw: bigint) => formatUnits(raw, FUSD_DECIMALS);
 
 export const claimAbi = parseAbi([
   "function issue(address debtor, uint256 faceValue, uint64 dueDate, bytes32 docHash) returns (uint256)",
-  "function sell(uint256 id, address buyer, uint256 price, bytes32 arkivBidKey)",
+  "struct Bid { uint256 claimId; address buyer; uint256 price; uint64 deadline; bytes32 nonce; }",
+  "function sell(Bid bid, bytes signature, bytes32 arkivBidKey)",
+  "function hashBid(Bid bid) view returns (bytes32)",
+  "function bidUsed(address buyer, bytes32 nonce) view returns (bool)",
   "function settle(uint256 id)",
   "function setEligible(address who, bool allowed)",
   "function eligible(address) view returns (bool)",
@@ -43,7 +48,7 @@ export const claimAbi = parseAbi([
   "function isOutstanding(uint256) view returns (bool)",
   "function nextId() view returns (uint256)",
   "event Issued(uint256 indexed id, address indexed issuer, address indexed debtor, uint256 faceValue, uint64 dueDate, bytes32 docHash)",
-  "event Sold(uint256 indexed id, address indexed from, address indexed to, uint256 price, bytes32 arkivBidKey)",
+  "event Sold(uint256 indexed id, address indexed from, address indexed to, uint256 price, bytes32 arkivBidKey, bytes32 bidNonce)",
   "event Settled(uint256 indexed id, address indexed paidTo, uint256 amount)",
   "event EligibilitySet(address indexed who, bool allowed)",
   "error NotEligible(address who)",
@@ -51,7 +56,42 @@ export const claimAbi = parseAbi([
   "error AlreadySettled(uint256 id)",
   "error NotDebtor(address caller)",
   "error NotHolder(address caller)",
+  "error SelfPurchase()",
+  "error BadBidSignature()",
+  "error BidExpired(uint64 deadline)",
+  "error BidAlreadyUsed(bytes32 nonce)",
 ]);
+
+/**
+ * The EIP-712 type a financier signs. MUST match `BID_TYPEHASH` in
+ * InvoiceClaim.sol field for field - `test_HashBid_MatchesEip712Layout` pins
+ * the Solidity side.
+ */
+export const BID_TYPES = {
+  Bid: [
+    { name: "claimId", type: "uint256" },
+    { name: "buyer", type: "address" },
+    { name: "price", type: "uint256" },
+    { name: "deadline", type: "uint64" },
+    { name: "nonce", type: "bytes32" },
+  ],
+} as const;
+
+export const bidDomain = () =>
+  ({
+    name: "Factor Invoice Claim",
+    version: "1",
+    chainId: fuji.id,
+    verifyingContract: CLAIM_ADDRESS,
+  }) as const;
+
+export interface Bid {
+  claimId: bigint;
+  buyer: `0x${string}`;
+  price: bigint;
+  deadline: bigint;
+  nonce: `0x${string}`;
+}
 
 export const erc20Abi = parseAbi([
   "function approve(address spender, uint256 amount) returns (bool)",
@@ -241,16 +281,65 @@ export async function issueInvoice(args: {
 }
 
 /**
- * Accept a bid. `arkivBidKey` is the Arkiv entity key of the offer being
- * filled, recorded on-chain so a judge (or an auditor) can reconcile the trade
- * against the expiring off-chain bid that produced it. This is the seam between
- * the two systems, made verifiable.
+ * Sign a bid as the connected financier. Off-chain and gas-free: this is the
+ * financier's consent to pay `priceHuman` for this one claim, and `sell()`
+ * will execute nothing else in their name.
+ *
+ * `ttlSeconds` becomes the on-chain deadline, matching the Arkiv lifetime, so
+ * the quote stops being executable when it stops being listed. The nonce is
+ * random so two otherwise identical bids are still different signatures.
+ */
+export async function signBid(args: {
+  account: `0x${string}`;
+  claimId: bigint;
+  priceHuman: string;
+  ttlSeconds: number;
+}): Promise<SignedBidWire> {
+  requireAddresses();
+  const bid: Bid = {
+    claimId: args.claimId,
+    buyer: args.account,
+    price: toFusd(args.priceHuman),
+    deadline: BigInt(Math.floor(Date.now() / 1000) + args.ttlSeconds),
+    nonce: toHex(crypto.getRandomValues(new Uint8Array(32))),
+  };
+  const signature = await fujiWallet().signTypedData({
+    account: args.account,
+    domain: bidDomain(),
+    types: BID_TYPES,
+    primaryType: "Bid",
+    message: bid,
+  });
+  return {
+    claimId: bid.claimId.toString(),
+    buyer: bid.buyer,
+    price: bid.price.toString(),
+    deadline: bid.deadline.toString(),
+    nonce: bid.nonce,
+    signature,
+  };
+}
+
+export const bidFromWire = (w: SignedBidWire): Bid => ({
+  claimId: BigInt(w.claimId),
+  buyer: w.buyer,
+  price: BigInt(w.price),
+  deadline: BigInt(w.deadline),
+  nonce: w.nonce,
+});
+
+/**
+ * Accept a bid. The terms come from the financier's signature, not from this
+ * call: the holder chooses WHICH bid to fill and nothing else.
+ *
+ * `arkivBidKey` is the Arkiv entity key of the offer being filled, recorded
+ * on-chain so a judge (or an auditor) can reconcile the trade against the
+ * expiring off-chain bid that produced it. This is the seam between the two
+ * systems, made verifiable.
  */
 export async function acceptBid(args: {
   account: `0x${string}`;
-  id: bigint;
-  buyer: `0x${string}`;
-  priceHuman: string;
+  signed: SignedBidWire;
   arkivBidKey: `0x${string}`;
 }) {
   const wallet = fujiWallet();
@@ -259,7 +348,7 @@ export async function acceptBid(args: {
     address: CLAIM_ADDRESS,
     abi: claimAbi,
     functionName: "sell",
-    args: [args.id, args.buyer, toFusd(args.priceHuman), args.arkivBidKey],
+    args: [bidFromWire(args.signed), args.signed.signature, args.arkivBidKey],
   });
 }
 
