@@ -9,7 +9,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { postBid, liveBidsFor } from "@/arkiv/bids";
 import { cleanKey } from "@/arkiv/client";
-import type { Sector } from "@/arkiv/schema";
+import type { Sector, SignedBidWire } from "@/arkiv/schema";
+import { fromFusd } from "@/fuji/claim";
 
 /** GET /api/arkiv/bids?invoiceId=1&maxDiscountBps=800 */
 export async function GET(req: NextRequest) {
@@ -34,7 +35,7 @@ export async function GET(req: NextRequest) {
   }
 }
 
-/** POST /api/arkiv/bids  { invoiceId, financierSlot: 1|2, discountBps, offerPrice, sector, ensName } */
+/** POST /api/arkiv/bids  { invoiceId, financierSlot: 1|2, discountBps, offerPrice, sector, ensName, signedBid? } */
 export async function POST(req: NextRequest) {
   const body = await req.json();
 
@@ -68,15 +69,21 @@ export async function POST(req: NextRequest) {
   const requested = Number(body.ttlSeconds ?? 60);
   const ttlSeconds = Math.max(2, requested - (requested % 2));
 
+  // A signed bid is the source of truth for whose offer this is, on which
+  // claim, at what price - so the queryable attributes are taken from it, and
+  // the book can never list terms other than the ones `sell()` would execute.
+  const signed: SignedBidWire | undefined = body.signedBid ?? undefined;
+
   try {
     const { entityKey, txHash } = await postBid(pk, {
-      invoiceId: BigInt(body.invoiceId),
-      financier: body.financier,
+      invoiceId: BigInt(signed?.claimId ?? body.invoiceId),
+      financier: signed?.buyer ?? body.financier,
       discountBps: Number(body.discountBps),
-      offerPrice: String(body.offerPrice),
+      offerPrice: signed ? fromFusd(BigInt(signed.price)) : String(body.offerPrice),
       sector: body.sector as Sector,
       ensName: String(body.ensName ?? ""),
       ttlSeconds,
+      signed,
     });
 
     return NextResponse.json({ entityKey, txHash, ttlSeconds });

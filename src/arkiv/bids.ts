@@ -9,7 +9,7 @@ import { eq, gt, lte, not } from "@arkiv-network/sdk/query";
 import { addr, bool, i32, str, u256, u64 } from "@arkiv-network/sdk/attr";
 import { ExpirationTime, jsonToPayload } from "@arkiv-network/sdk/utils";
 import { arkivPublic, arkivWallet, currentBlock, secondsUntil } from "./client";
-import { bidAttributes, KIND, type BidInput } from "./schema";
+import { bidAttributes, KIND, type BidInput, type SignedBidWire } from "./schema";
 import { PROJECT } from "./project";
 import {
   asAddress,
@@ -29,6 +29,8 @@ export interface LiveBid {
   ensName: string;
   expiresAtBlock: bigint;
   secondsLeft: number;
+  /** What `sell()` actually executes. Null for an unsigned placeholder bid. */
+  signed: SignedBidWire | null;
 }
 
 /** Post an offer that cancels itself. */
@@ -43,7 +45,7 @@ export async function postBid(privateKey: `0x${string}`, bid: BidInput) {
   return arkivWallet(privateKey).createEntity({
     payload: jsonToPayload({
       // Not queryable, so nothing here may be needed for filtering.
-      quoteSignature: bid.ensName ? `signed-by:${bid.financier}` : undefined,
+      signedBid: bid.signed,
       postedAtIso: new Date().toISOString(),
     }),
     contentType: "application/json",
@@ -94,6 +96,7 @@ export async function liveBidsFor(invoiceId: bigint, maxDiscountBps: number): Pr
       ensName: asString(a.ens_name),
       expiresAtBlock: expiresAt,
       secondsLeft: secondsUntil(expiresAt, block),
+      signed: signedBidOf(e),
     };
   });
 
@@ -124,6 +127,22 @@ export async function liveBidsFor(invoiceId: bigint, maxDiscountBps: number): Pr
   // Arkiv has no ORDER BY, so ranking happens here. Fine for a 50-row page,
   // wrong for a real book - noted in arkiv/feedback.md.
   return bids.sort((a, b) => a.discountBps - b.discountBps);
+}
+
+/**
+ * The signed terms from a bid's payload, or null.
+ *
+ * A malformed payload is a bid nobody can fill, not a reason to hide the rest
+ * of the book, so this never throws. The contract checks the signature; this
+ * only finds it.
+ */
+function signedBidOf(e: any): SignedBidWire | null {
+  try {
+    const s = e.toJson()?.signedBid;
+    return s && typeof s.signature === "string" ? (s as SignedBidWire) : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Best live bid, or null if they have all expired. */

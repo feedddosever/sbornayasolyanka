@@ -9,13 +9,18 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 /// WHY THIS EXISTS. `InvoiceClaim.sell` is called by the HOLDER but moves money
 /// from the BUYER:
 ///
-///     stable.safeTransferFrom(buyer, holder, price);
+///     stable.safeTransferFrom(bid.buyer, holder, bid.price);
 ///
 /// so the buyer must have approved the claim contract beforehand. That mirrors
 /// how a financier really operates — you grant a standing allowance once, then
-/// fills happen without you signing each one — but it means a demo where nobody
-/// ever approved fails at the most important moment with "insufficient
+/// each fill spends only what you signed in that bid — but it means a demo where
+/// nobody ever approved fails at the most important moment with "insufficient
 /// allowance". Run this once per financier key before demoing.
+///
+/// The allowance is not an authorisation to spend: `sell` refuses any bid the
+/// financier did not sign (EIP-712), so a holder cannot pick the buyer or the
+/// price. Before that check existed, this standing allowance was exactly what
+/// any eligible holder could drain.
 ///
 /// Usage (once per financier):
 ///   PRIVATE_KEY=$ARKIV_FIN1_PK ... no: use the FUJI key for that financier
