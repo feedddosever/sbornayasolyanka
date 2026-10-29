@@ -271,21 +271,6 @@ Reconnection is the interesting part: you cannot both replay a gap and stay on a
 
 ---
 
-## A stale directory, disclosed rather than hidden
-
-`factor/` is a duplicate of this project from early in the weekend, left behind
-when the repository was restructured. **Ignore it**: it is excluded from the
-TypeScript build and nothing imports it. It survives only because removing 32
-files through the GitHub API one commit at a time would have made the history
-less readable than the directory makes the tree. Remove it with:
-
-```bash
-git rm -r factor && git commit -m "remove the stale duplicate" && git push
-```
-
-Naming it here because a reviewer opening the repository will see it, and
-discovering it unexplained is worse than being told.
-
 ## Honest limitations
 
 - `setEligible` is owner-controlled. In production that boundary is a KYC process; pretending otherwise would misrepresent the trust model.
